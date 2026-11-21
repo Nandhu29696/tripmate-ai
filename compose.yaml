@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tripmate}
+      POSTGRES_USER: ${POSTGRES_USER:-tripmate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tripmate-local-only}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - tripmate-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tripmate-postgres-data:

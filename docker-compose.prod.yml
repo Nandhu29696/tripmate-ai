@@ -1,0 +1,52 @@
+# Production deployment for a Linux VPS with PostgreSQL and Nginx on the host.
+# Nginx (TLS) -> 127.0.0.1:8014 -> this FastAPI application.
+#
+# Deploy with: bash deploy/deploy.sh
+# The app uses host networking to reach PostgreSQL on 127.0.0.1:5432.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tripmate-ai:latest
+    container_name: tripmate-ai
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    env_file:
+      - .env.production
+    environment:
+      UV_CACHE_DIR: /home/tripmate/.cache/uv
+    command:
+      - uvicorn
+      - app:app
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8014"
+      - --proxy-headers
+      - --forwarded-allow-ips=127.0.0.1
+      - --timeout-graceful-shutdown
+      - "15"
+    volumes:
+      - uv_cache:/home/tripmate/.cache/uv
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8014/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    stop_grace_period: 20s
+
+volumes:
+  uv_cache:

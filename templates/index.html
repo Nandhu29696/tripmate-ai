@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TripMate AI</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1">
+  <link rel="stylesheet" href="/static/style.css?v=3">
+</head>
+<body>
+  <div class="page-bg">
+    <div class="ambient ambient-one"></div>
+    <div class="ambient ambient-two"></div>
+  </div>
+
+  <main class="app-container">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="TripMate AI home">
+        <span class="brand-mark" aria-hidden="true">T</span>
+        <span>TripMate <span class="brand-light">AI</span></span>
+      </a>
+      <div class="topbar-actions">
+        <span class="workspace-label"><span class="status-dot"></span> Local workspace</span>
+        <button class="new-trip-btn" type="button" onclick="startNewTrip()">New trip</button>
+      </div>
+    </header>
+
+    <section class="hero-section">
+      <div class="hero-copy">
+        <span class="eyebrow">YOUR PERSONAL TRAVEL STUDIO</span>
+        <h1>Make room for<br><span>somewhere new.</span></h1>
+        <p>Tell us what your ideal trip looks like. Your travel team will shape a thoughtful draft for you to review.</p>
+      </div>
+      <div class="hero-note">
+        <span class="hero-note-icon" aria-hidden="true">✦</span>
+        <div>
+          <strong>Thoughtful plans, your way</strong>
+          <p>Start with a destination, dates, and the details that matter to you.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="planner-card">
+      <div class="card-header">
+        <div>
+          <span class="section-kicker">01 <span>START PLANNING</span></span>
+          <h2>Where are we going?</h2>
+          <p>A little context helps us make the plan feel like yours.</p>
+        </div>
+      </div>
+
+      <div class="planner-layout">
+        <div class="planner-main">
+          <label class="field-label" for="userInput">Describe your trip</label>
+          <textarea
+            id="userInput"
+            aria-describedby="promptHint promptCount"
+            placeholder="A week in Japan this fall, flying from Dhaka. We love food, quiet neighborhoods, and a mid-range budget..."
+          ></textarea>
+          <div class="prompt-meta">
+            <span id="promptHint">Destination, dates, budget, pace, and interests are great starting points.</span>
+            <span id="promptCount" aria-live="polite">0 characters</span>
+          </div>
+
+          <div class="quick-prompt-heading">
+            <span>NEED A SPARK?</span>
+            <span>Choose an idea to get started</span>
+          </div>
+          <div class="quick-prompts">
+            <button type="button" onclick="setPrompt('Plan a 7-day Japan trip from Dhaka in October for two people, including food, culture, and a mid-range budget.')">
+              <span aria-hidden="true">🌸</span> Japan in autumn
+            </button>
+            <button type="button" onclick="setPrompt('Plan a 5-day Dubai trip from Dhaka with comfortable hotels, local food, and a mix of city highlights and relaxing time.')">
+              <span aria-hidden="true">🌆</span> Dubai city break
+            </button>
+            <button type="button" onclick="setPrompt('Plan a 7-day Thailand trip from Bangladesh with beaches, local food, budget-friendly stays, and relaxed sightseeing.')">
+              <span aria-hidden="true">🏝️</span> Thailand escape
+            </button>
+          </div>
+
+          <div class="submit-row">
+            <span class="keyboard-hint">Pro tip: press <kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
+            <button id="sendBtn" type="button" onclick="sendMessage()">
+              <span id="btnText">Create my draft <span aria-hidden="true">→</span></span>
+              <span id="btnLoader" class="loader hidden" aria-label="Planning"></span>
+            </button>
+          </div>
+        </div>
+
+        <aside class="planner-aside" aria-label="Trip planning tips">
+          <div class="aside-card">
+            <span class="aside-icon" aria-hidden="true">✧</span>
+            <h3>A few helpful details</h3>
+            <ul>
+              <li><span>01</span> Where you’re starting from</li>
+              <li><span>02</span> When you want to travel</li>
+              <li><span>03</span> Your budget and travel style</li>
+              <li><span>04</span> What you love to do</li>
+            </ul>
+          </div>
+          <div class="aside-footnote">
+            <span aria-hidden="true">✓</span>
+            <p>You’ll review the itinerary before it’s finalized.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="workflowSection" class="workflow-section hidden" aria-live="polite">
+      <div class="workflow-header">
+        <div>
+          <span class="section-kicker">02 <span>YOUR TRIP TEAM</span></span>
+          <h2>How your plan is coming together</h2>
+        </div>
+        <span id="guardrailBadge" class="guardrail-badge">Guardrail passed</span>
+      </div>
+      <ol class="workflow-stepper" aria-label="Planning progress">
+        <li class="workflow-step" data-step="request"><span>1</span><strong>Your request</strong></li>
+        <li class="workflow-step" data-step="research"><span>2</span><strong>Trip research</strong></li>
+        <li class="workflow-step" data-step="review"><span>3</span><strong>Your review</strong></li>
+      </ol>
+      <div class="workflow-detail">
+        <p id="supervisorReasoning" class="supervisor-reasoning"></p>
+        <div id="agentChips" class="agent-chips"></div>
+      </div>
+    </section>
+
+    <section id="resultSection" class="result-section hidden">
+      <div class="result-header">
+        <div>
+          <span class="section-kicker">03 <span>THE ITINERARY</span></span>
+          <h2 id="resultTitle">Your AI Travel Plan</h2>
+          <p id="threadInfo">Trip reference: -</p>
+        </div>
+        <div class="result-actions">
+          <button class="copy-btn" type="button" onclick="copyResult()">Copy plan</button>
+          <button class="download-btn" type="button" onclick="downloadPDF()">Download PDF <span aria-hidden="true">↓</span></button>
+        </div>
+      </div>
+
+      <div id="pdfContent" class="pdf-content">
+        <h1 class="pdf-title">AI Travel Plan</h1>
+        <div id="resultBox" class="result-box"></div>
+      </div>
+    </section>
+
+    <section id="approvalSection" class="approval-section hidden" aria-labelledby="approvalTitle">
+      <div class="approval-icon" aria-hidden="true">✦</div>
+      <div class="approval-content">
+        <span class="section-kicker">04 <span>YOUR CALL</span></span>
+        <h2 id="approvalTitle">A good trip starts with your review.</h2>
+        <p id="approvalRequest">
+          Approve the draft or provide feedback before the final plan is generated.
+        </p>
+
+        <label class="field-label" for="approvalFeedback">Want to change anything?</label>
+        <textarea
+          id="approvalFeedback"
+          class="feedback-input"
+          placeholder="For example: lower the hotel budget, add a slower day, or include more local food..."
+        ></textarea>
+
+        <div class="approval-actions">
+          <button id="approveBtn" class="approve-btn" type="button" onclick="submitApproval(true)">
+            Looks good, finalize <span aria-hidden="true">→</span>
+          </button>
+          <button id="reviseBtn" class="revise-btn" type="button" onclick="submitApproval(false)">
+            Request changes
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="errorBox" class="error-box hidden" role="alert"></section>
+  </main>
+
+  <footer>
+    <span>Thoughtful plans for wherever you’re headed.</span>
+    <span>Built with FastAPI · LangGraph · MCP</span>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="/static/script.js?v=3"></script>
+</body>
+</html>

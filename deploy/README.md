@@ -16,6 +16,8 @@ Port `8014` is intentionally distinct from the example app's `8004` backend, `80
 
 Install Docker Engine with the Compose plugin, PostgreSQL, Nginx, and `curl`. Keep PostgreSQL listening on loopback and ensure its local TCP authentication is enabled. Keep the existing Nginx TLS configuration and certificate; this deployment adds only a reverse-proxy location.
 
+In the DNS zone for `jagoindia.in`, point the `tripmate-ai` A record to this VPS's public IPv4 address. The hostname currently resolves to `187.127.166.46`; confirm that is the intended VPS address. Remove or correct any AAAA record unless IPv6 is configured on the VPS. Allow inbound TCP ports 80 and 443 in the Hostinger firewall and any VPS firewall.
+
 Create a dedicated database role and database if they do not already exist:
 
 ```bash
@@ -53,25 +55,47 @@ docker compose --env-file .env.production -f docker-compose.prod.yml logs -f app
 
 The first build downloads Python dependencies. The first AviationStack MCP call may also download its `uvx` tool package. LangGraph creates its checkpoint tables in the configured PostgreSQL database on app startup. Conversation state stays in PostgreSQL; the Docker named volume is only for the `uvx` package cache.
 
-## 4. Connect the existing Nginx TLS site
+## 4. Configure Nginx and HTTPS for the subdomain
 
-Install the rate-limit zone inside Nginx's `http {}` context (on many distributions, a file in `/etc/nginx/conf.d/` is included there):
+The public hostname for this deployment is `tripmate-ai.jagoindia.in`. If Nginx already has a server block for this hostname, set its `server_name` to `tripmate-ai.jagoindia.in` and ensure it has a valid certificate for that name. If no server block exists yet, create a temporary HTTP-only block so Certbot can identify the hostname:
+
+```nginx
+server {
+    listen 80;
+    server_name tripmate-ai.jagoindia.in;
+    location / { return 404; }
+}
+```
+
+Save it as `/etc/nginx/conf.d/tripmate-ai.conf`, then issue and install a certificate using the Nginx Certbot plugin:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot --nginx -d tripmate-ai.jagoindia.in --redirect
+```
+
+Certbot requires DNS to point to this VPS and inbound port 80 to be reachable for validation. Install the Certbot Nginx plugin first if it is not already available. If TLS for this hostname is already managed elsewhere, do not create a duplicate server block; configure that existing TLS site instead.
+
+Install the rate-limit zone inside Nginx's `http {}` context (on many distributions, a file in `/etc/nginx/conf.d/` is included there), and install the location fragment:
 
 ```bash
 sudo cp deploy/nginx/tripmate-rate-limit.conf /etc/nginx/conf.d/tripmate-rate-limit.conf
 sudo cp deploy/nginx/tripmate-location.conf /etc/nginx/snippets/tripmate-location.conf
 ```
 
-Inside the existing TLS `server {}` block for TripMate, add `include /etc/nginx/snippets/tripmate-location.conf;`. Replace any existing catch-all `location /` for this site rather than adding a duplicate. The included locations proxy the UI and API to `127.0.0.1:8014`, preserve forwarding headers, allow up to five API requests per minute per IP with a burst of two, and return 429 when rate-limited. They also hide the interactive OpenAPI docs.
+Inside the HTTPS `server {}` block for `tripmate-ai.jagoindia.in`, add `include /etc/nginx/snippets/tripmate-location.conf;`. Replace any existing catch-all `location /` for this site rather than adding a duplicate. The included locations proxy the UI and API to `127.0.0.1:8014`, preserve forwarding headers, allow up to five API requests per minute per IP with a burst of two, and return 429 when rate-limited. They also hide the interactive OpenAPI docs.
 
-Validate and reload Nginx:
+Validate, reload Nginx, and verify the site and certificate:
 
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
+curl --fail https://tripmate-ai.jagoindia.in/health
+sudo certbot renew --dry-run
 ```
 
-The sample location fragment does not create a TLS certificate or server block. Keep TLS termination and the external listener in the existing VPS Nginx configuration. Do not expose port `8014` through the VPS firewall.
+The location fragment does not create a TLS certificate or server block. Keep TLS termination at Nginx and do not expose port `8014` through the VPS firewall.
 
 ## 5. Updating and operating
 
@@ -90,6 +114,7 @@ The API currently has no user login or authorization. The included Nginx rate li
 - **Container unhealthy / database connection error:** verify PostgreSQL is running, accepts TCP on `127.0.0.1:5432`, and the URL credentials/database are correct.
 - **Nginx 502:** check `docker compose ... ps` and app logs; confirm the app is listening at `127.0.0.1:8014`.
 - **Nginx 404 or duplicate location error:** include the proxy locations inside the correct TLS server block and replace, rather than duplicate, an existing `location /`.
+- **Certificate hostname mismatch:** confirm the A/AAAA records point to this VPS and renew/install a certificate that includes `tripmate-ai.jagoindia.in`.
 - **Nginx 429:** the per-client API rate limit is active; adjust `rate` and `burst` in the Nginx snippets to fit real usage.
 - **Groq errors:** verify the model ID is available to the configured key and account TPM limits allow the request.
 - **Deployment on a non-Linux Docker host:** this Compose file relies on Linux host networking; use a bridge-network deployment design instead.

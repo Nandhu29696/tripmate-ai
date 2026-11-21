@@ -29,7 +29,12 @@ The app's `DATABASE_URL` connects to `127.0.0.1:5432` from the host-network cont
 
 ## 2. Get the project and configure secrets
 
-Clone or copy the project to the VPS. Do not copy a developer's `.env`, commit credentials, or bake a secrets file into the image.
+Clone the published deployment branch to the VPS. Do not copy a developer's `.env`, commit credentials, or bake a secrets file into the image.
+
+```bash
+git clone --branch tripmate-ai-publish https://github.com/Nandhu29696/tripmate-ai.git tripmate-ai
+cd tripmate-ai
+```
 
 From the project directory:
 

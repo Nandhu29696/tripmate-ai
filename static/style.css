@@ -240,6 +240,9 @@ button {
 }
 
 .planner-card,
+.login-section,
+.trips-section,
+.progress-section,
 .workflow-section,
 .result-section,
 .approval-section {
@@ -250,12 +253,18 @@ button {
 }
 
 .planner-card,
+.login-section,
+.trips-section,
+.progress-section,
 .workflow-section,
 .result-section,
 .approval-section {
   padding: 29px;
 }
 
+.login-section,
+.trips-section,
+.progress-section,
 .workflow-section,
 .result-section,
 .approval-section {
@@ -1154,5 +1163,172 @@ textarea:focus-visible {
 
   .pdf-title {
     display: block;
+  }
+}
+
+
+/* ---- Access login, saved trips (v4) ---- */
+.text-input {
+  display: block;
+  width: 100%;
+  border: 1px solid #dfe5ee;
+  border-radius: 12px;
+  background: #fbfcfe;
+  color: var(--ink);
+  padding: 13px 15px;
+  font-size: 0.95rem;
+  outline: none;
+}
+.text-input:focus {
+  border-color: #8da6f5;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(66, 103, 232, 0.1);
+}
+#loginBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 150px;
+  min-height: 47px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--blue);
+  box-shadow: 0 9px 20px rgba(66, 103, 232, 0.2);
+  color: #fff;
+  font-size: 0.88rem;
+  font-weight: 780;
+  cursor: pointer;
+}
+#loginBtn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.trip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.trip-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fbfcfe;
+}
+.trip-item strong {
+  display: block;
+  max-width: 52ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+.trip-item span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.trip-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.trip-actions button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--blue-dark);
+  font-weight: 700;
+  cursor: pointer;
+}
+.trip-actions .danger-btn {
+  color: #b42318;
+}
+@media (max-width: 600px) {
+  .trip-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .trip-item strong {
+    max-width: none;
+  }
+}
+
+
+/* ---- Live progress (v5) ---- */
+.progress-section h2 {
+  margin: 0 0 6px;
+  font-size: 1.15rem;
+  color: var(--ink);
+}
+.progress-note {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.progress-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.progress-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+.progress-step .step-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  font-size: 0.72rem;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+.progress-step.is-active {
+  color: var(--ink);
+  font-weight: 700;
+}
+.progress-step.is-active .step-icon {
+  border-color: var(--blue);
+  border-top-color: transparent;
+  animation: progress-spin 0.8s linear infinite;
+}
+.progress-step.is-done .step-icon {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #fff;
+}
+.progress-step.is-failed {
+  color: #b42318;
+}
+.progress-step.is-failed .step-icon {
+  border-color: #b42318;
+  color: #b42318;
+}
+@keyframes progress-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-step.is-active .step-icon {
+    animation: none;
+    border-top-color: var(--blue);
   }
 }

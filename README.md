@@ -1,107 +1,110 @@
-# Multi-Agent-System-using-LangGraph-MCP-Supervisor-Guardrails-HITL
+# TripMate AI - Multi-Agent Travel Planner (LangGraph + MCP)
 
-A demo multi-agent system that uses LangGraph and MCP to implement a travel-planning assistant with a Supervisor, input Guardrails, and Human-In-The-Loop (HITL) approval flows. The project includes a FastAPI frontend, example MCP server, and client helpers to demonstrate how agents, supervisors, and guardrails can be composed into a safe, reviewable planning pipeline.
+A multi-agent travel-planning assistant built with LangGraph and MCP. A **Supervisor** applies an input **guardrail** and picks the specialist agents, the research agents run **in parallel**, and a **human approves or revises** the draft itinerary (up to two revision rounds) before the final plan is produced.
 
 Key ideas:
-- Multi-agent coordination using LangGraph and MCP
-- Supervisor agent to manage complex workflows
-- Input guardrails to validate user requests
-- Human-in-the-loop approval for generated plans
+- Multi-agent coordination with LangGraph; live data through MCP servers (Tavily, AviationStack, OpenWeather)
+- Supervisor + guardrail in one structured LLM call, fail-closed on unparseable output
+- Human-in-the-loop approval with a revision loop and restorable drafts
+- Live progress while a plan is built (streamed), and source-linked hotel suggestions
+- Access key, signed sessions, per-owner trips, quotas, retention and delete
 
-Contents
-- `app.py`: FastAPI web frontend and API endpoints
-- `backend.py`: core agent orchestration / travel-planner logic
-- `mcp_client.py`: client helpers to interact with the MCP server
-- `custom_weather_mcp_server.py`: example MCP server for weather checks
-- `templates/`, `static/`: frontend UI assets (HTML, JS, CSS)
+## Contents
+- `app.py`: FastAPI app, routes, security headers, lifespan
+- `backend.py`: LangGraph workflow, agents, trip service (start/resume/restore/delete/purge)
+- `mcp_client.py`: persistent MCP sessions on a private event loop
+- `custom_weather_mcp_server.py`: OpenWeather MCP server (current weather + daily forecast)
+- `config.py`: settings, logging, shared LLM client
+- `llm_utils.py`: token budgeting, prompt fencing, per-node LLM call counting
+- `security.py`: session tokens, access key, quotas, login throttling
+- `store.py`: thread ownership registry (`tripmate_threads` table)
+- `templates/`, `static/`: UI (libraries are self-hosted in `static/vendor/`)
+- `tests/`: pytest suite (no network or database needed)
+- `deploy/`: production runbook, `deploy.sh`, Nginx fragments
+- `PROJECT_DOCUMENTATION/`: architecture, API, security review and remediation report
 
-Features
-- Interactive web UI for sending travel planning prompts
-- Endpoint for drafting travel plans and separate approval endpoint
-- Example MCP server demonstrating domain adapters (weather, checkpoints)
+## Prerequisites
+- Python 3.12
+- Docker Desktop with the Linux engine running (for the local PostgreSQL database)
+- A Groq API key. Tavily, AviationStack and OpenWeather keys are optional and only needed for their live-data tools.
 
-Prerequisites
-- Python 3.10+ (Python 3.11 or 3.12 recommended)
-- Docker Desktop with the Linux container engine running (for the local PostgreSQL database)
-- API keys: Groq is required; Tavily, AviationStack, and OpenWeather are needed only for their respective live-data tools
+## Quick start (Windows PowerShell)
 
-Quick start (Windows PowerShell)
-
-1. Create the local environment file and add your Groq API key
+1. Create the environment file and add your Groq key
 
 ```powershell
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 notepad .env
 ```
 
-The checked-out project may already have a `.env`; edit it rather than overwriting it. `.env` is ignored by Git and must not be committed.
+`.env` is ignored by Git and must not be committed. `GROQ_MODEL` defaults to `openai/gpt-oss-120b`; for `gpt-oss` models `LLM_REASONING_EFFORT` defaults to `low` so hidden reasoning tokens do not eat the answer budget.
 
-Set `GROQ_API_KEY` to a key from the Groq Console. `GROQ_MODEL` defaults to `openai/gpt-oss-120b`; choose a model ID available to your API key if you change it. The model list for your key is available from `https://api.groq.com/openai/v1/models`.
-
-LLM prompts are bounded to 5,200 input tokens and responses to 768 tokens to help stay within Groq's on-demand TPM limits. Oversized user or tool context is shortened, so include the most important trip requirements first. Groq applies TPM limits across recent requests; if repeated requests still exceed your plan, wait for the quota window to reset or use a model/tier with a higher limit.
-
-2. Start the local PostgreSQL database
+2. Start the local database
 
 ```powershell
 docker compose up -d db
-docker compose ps
 ```
 
-The database is exposed only on `127.0.0.1:5433` (mapped to PostgreSQL's container port 5432 to avoid conflicts with an existing local database). Its local connection string and credentials are in `.env`; they are for local development only. The named Docker volume keeps checkpoint data across restarts.
+PostgreSQL is exposed only on `127.0.0.1:5433`. `docker compose down -v` deletes all saved trips.
 
-3. Create and activate a virtual environment, then install dependencies
+3. Install and run
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` in that terminal and activate again.
-
-4. Run the FastAPI app
-
-```powershell
+python -m pip install -r requirements-dev.txt
 python app.py
 ```
 
-Open http://127.0.0.1:8000. The LangGraph PostgreSQL tables are initialized automatically at startup.
+Open http://127.0.0.1:8000. With `APP_ACCESS_KEY` empty (the default for local use) the app is open and each browser gets an anonymous session; set `APP_ACCESS_KEY` to require a key. Tables are created automatically at startup.
 
-Flight search requires `AVIATION_STACK_API_KEY`; `uvx` is installed with the project dependencies. Hotel search requires `TAVILY_API_KEY`; weather tools require `OPENWEATHER_API_KEY`. These integrations are used only when the corresponding agent is selected.
+Flight data uses the version-pinned `aviationstack-mcp` server, started through `uvx` (installed by the `uv` dependency; the first run downloads Python 3.13 for it). In Docker it is pre-installed in the image.
 
-To stop the database without removing its data:
+## Tests and lint
 
 ```powershell
-docker compose down
+python -m pytest -q      # 73 tests, no network or database
+ruff check .
 ```
 
-To remove the local database and all saved checkpoint data, run `docker compose down -v`.
+CI (`.github/workflows/ci.yml`) runs lint, a script syntax check, the tests and a Docker build.
 
-## Hostinger VPS deployment
+## API
 
-The production Docker and Nginx setup is documented in [deploy/README.md](./deploy/README.md). It uses the VPS host's PostgreSQL and TLS-terminating Nginx, with the container bound only to `127.0.0.1:8014`.
+All `/api/travel*` endpoints need a session cookie from `/api/session` and only ever touch the caller's own trips (other trips return 404).
 
-API Endpoints
-- `POST /api/travel` — create or resume a travel planning thread. JSON: `{ "message": "<user prompt>", "thread_id": "optional-thread-id" }`
-- `POST /api/travel/approve` — approve or request revisions for a draft. JSON: `{ "thread_id": "<id>", "approved": true|false, "feedback": "optional" }`
-- `GET /health` — basic health check and features list
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/session` | Auth status; in open mode issues an anonymous session |
+| POST | `/api/session` | Sign in `{access_key}` (throttled) |
+| DELETE | `/api/session` | Sign out |
+| POST | `/api/travel` | New trip `{message}`; pauses for review (`requires_approval`) |
+| POST | `/api/travel/stream` | Same, but streams live progress as NDJSON: `{type:"progress",node,label,state}` lines, then one `{type:"result",...}` or `{type:"error",status,error}` |
+| POST | `/api/travel/approve` | `{thread_id, approved, feedback?}`; a rejection returns a revised draft (max `MAX_REVISIONS`) |
+| POST | `/api/travel/approve/stream` | Streaming variant of approve (404/409/400 are returned as normal HTTP statuses before the stream opens) |
+| GET | `/api/travel/threads` | List your trips |
+| GET | `/api/travel/{thread_id}` | Restore a trip (draft awaiting review, or final plan) |
+| DELETE | `/api/travel/{thread_id}` | Delete a trip and its checkpoints |
+| GET | `/health` | Liveness (no dependencies) |
+| GET | `/ready` | Readiness (checks the database) |
 
-Configuration & environment
-- `.env.example` documents the local settings; copy it to `.env` and add your own API keys. Never commit `.env` or put production credentials in the local Compose configuration.
+Errors are `{success:false, error, request_id}`; 401 not signed in, 404 not found/not yours, 409 wrong state (e.g. already approved), 429 quota or provider rate limit (with `Retry-After`), 503 provider unavailable, 500 generic with a reference id.
 
-Development notes
-- The project keeps synchronous convenience wrappers in `backend.py` while running an async FastAPI server — `nest_asyncio` is applied in `app.py` to allow the sync helpers to call async MCP helpers.
-- Tests are not included; to experiment, interact with the web UI or call the API endpoints directly.
+## Configuration
 
-Contributing
-- Contributions are welcome. Please open issues or pull requests for bug fixes, documentation improvements, or new adapter examples.
+Required: `GROQ_API_KEY`, `DATABASE_URL`. Production also needs `SESSION_SECRET` (and should set `APP_ACCESS_KEY`). Optional tuning (defaults): `MAX_PLANS_PER_SESSION_PER_HOUR=5`, `MAX_PLANS_PER_DAY=300`, `RETENTION_DAYS=30`, `MAX_REVISIONS=2`, `GUARDRAIL_FAIL_OPEN=false`, `LLM_TIMEOUT_SECONDS=60`, `LLM_MAX_RETRIES=2`, `LLM_OUTPUT_TOKENS=1000`, `LLM_OUTPUT_TOKENS_ITINERARY=2000`, `LLM_OUTPUT_TOKENS_FINAL=2600`, `LLM_MAX_INPUT_TOKENS=5200`, `MAX_MESSAGE_CHARS=4000`, `DB_POOL_MAX=10`. See `.env.example` and `.env.production.example`.
 
-License
-- This repository follows the license in the `LICENSE` file.
+Quotas are counted in process memory (single worker). Run one worker, or move the counters to a shared store before scaling out.
 
-Acknowledgements
-- Built as a demonstration of LangGraph + MCP patterns with supervisor and guardrail concepts.
+## Production deployment
 
-Contact
-- For questions or suggestions, open an issue or contact the repository owner.
+See [deploy/README.md](./deploy/README.md): Docker (host network, loopback only), Nginx with TLS and rate limits, versioned images, pre-deploy database backup and one-command rollback.
+
+## Operating notes
+- The UI uses the `/stream` endpoints. The run is not tied to the connection: if the tab is closed the plan still finishes and appears under "Your trips".
+- Logs go to stdout with a request id per line (`docker compose logs -f app`); each LLM call logs latency, tokens and finish reason.
+- Saved trips (prompts and plans) are purged after `RETENTION_DAYS`; users can delete a trip any time.
+- Prompts and generated plans are sent to Groq, and search text to Tavily; inform users accordingly.
+
+## License
+See `LICENSE`.

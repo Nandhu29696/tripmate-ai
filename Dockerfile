@@ -1,24 +1,34 @@
 FROM python:3.12-slim
 
+# Pinned AviationStack MCP server (needs Python >= 3.13; uv downloads that
+# interpreter at build time, so nothing is fetched at runtime).
+ARG AVIATIONSTACK_MCP_VERSION=1.8.1
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/home/tripmate \
-    UV_CACHE_DIR=/home/tripmate/.cache/uv
+    UV_TOOL_DIR=/opt/uv/tools \
+    UV_TOOL_BIN_DIR=/usr/local/bin \
+    UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+    TIKTOKEN_CACHE_DIR=/opt/tiktoken \
+    AVIATIONSTACK_MCP_VERSION=${AVIATIONSTACK_MCP_VERSION}
 
 WORKDIR /app
 
 RUN groupadd --system --gid 10001 tripmate \
     && useradd --system --uid 10001 --gid tripmate \
         --home-dir /home/tripmate --create-home \
-        --shell /usr/sbin/nologin tripmate \
-    && mkdir -p /home/tripmate/.cache/uv \
-    && chown -R tripmate:tripmate /home/tripmate
+        --shell /usr/sbin/nologin tripmate
 
-COPY requirements.txt .
+# Fully pinned dependency set (see requirements.txt / requirements.lock).
+COPY requirements.txt requirements.lock ./
 
 RUN python -m pip install --upgrade pip \
-    && python -m pip install -r requirements.txt
+    && python -m pip install -r requirements.lock \
+    && uv tool install --python 3.13 "aviationstack-mcp==${AVIATIONSTACK_MCP_VERSION}" \
+    && python -c "import tiktoken; tiktoken.get_encoding('o200k_base')" \
+    && chmod -R a+rX /opt/uv /opt/tiktoken
 
 COPY --chown=tripmate:tripmate . .
 

@@ -217,3 +217,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Deployment state and local backups (see deploy/deploy.sh)
+.deployed_version
+.previous_version
+backups/

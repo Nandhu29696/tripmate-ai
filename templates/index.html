@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TripMate AI</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1">
-  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
   <div class="page-bg">
@@ -20,10 +20,27 @@
         <span>TripMate <span class="brand-light">AI</span></span>
       </a>
       <div class="topbar-actions">
-        <span class="workspace-label"><span class="status-dot"></span> Local workspace</span>
-        <button class="new-trip-btn" type="button" onclick="startNewTrip()">New trip</button>
+        <span class="workspace-label"><span class="status-dot"></span> Your workspace</span>
+        <button id="logoutBtn" class="new-trip-btn hidden" type="button" data-action="logout">Sign out</button>
+        <button class="new-trip-btn" type="button" data-action="new-trip">New trip</button>
       </div>
     </header>
+
+    <section id="loginSection" class="login-section hidden" aria-labelledby="loginTitle">
+      <div class="card-header">
+        <div>
+          <span class="section-kicker">ACCESS <span>PRIVATE BETA</span></span>
+          <h2 id="loginTitle">Enter your access key</h2>
+          <p>TripMate AI is invitation-only. Enter the key you were given to start planning.</p>
+        </div>
+      </div>
+      <label class="field-label" for="accessKey">Access key</label>
+      <input id="accessKey" class="text-input" type="password" autocomplete="current-password" maxlength="200">
+      <div class="submit-row">
+        <span id="loginMessage" class="keyboard-hint" role="status"></span>
+        <button id="loginBtn" type="button" data-action="login">Continue <span aria-hidden="true">→</span></button>
+      </div>
+    </section>
 
     <section class="hero-section">
       <div class="hero-copy">
@@ -40,7 +57,18 @@
       </div>
     </section>
 
-    <section class="planner-card">
+    <section id="tripsSection" class="trips-section hidden" aria-labelledby="tripsTitle">
+      <div class="card-header">
+        <div>
+          <span class="section-kicker">00 <span>YOUR TRIPS</span></span>
+          <h2 id="tripsTitle">Pick up where you left off</h2>
+          <p>Saved trips are removed automatically after a while. You can delete one at any time.</p>
+        </div>
+      </div>
+      <ul id="tripList" class="trip-list"></ul>
+    </section>
+
+    <section class="planner-card" id="plannerSection">
       <div class="card-header">
         <div>
           <span class="section-kicker">01 <span>START PLANNING</span></span>
@@ -67,20 +95,20 @@
             <span>Choose an idea to get started</span>
           </div>
           <div class="quick-prompts">
-            <button type="button" onclick="setPrompt('Plan a 7-day Japan trip from Dhaka in October for two people, including food, culture, and a mid-range budget.')">
+            <button type="button" data-action="set-prompt" data-prompt="Plan a 7-day Japan trip from Dhaka in October for two people, including food, culture, and a mid-range budget.">
               <span aria-hidden="true">🌸</span> Japan in autumn
             </button>
-            <button type="button" onclick="setPrompt('Plan a 5-day Dubai trip from Dhaka with comfortable hotels, local food, and a mix of city highlights and relaxing time.')">
+            <button type="button" data-action="set-prompt" data-prompt="Plan a 5-day Dubai trip from Dhaka with comfortable hotels, local food, and a mix of city highlights and relaxing time.">
               <span aria-hidden="true">🌆</span> Dubai city break
             </button>
-            <button type="button" onclick="setPrompt('Plan a 7-day Thailand trip from Bangladesh with beaches, local food, budget-friendly stays, and relaxed sightseeing.')">
+            <button type="button" data-action="set-prompt" data-prompt="Plan a 7-day Thailand trip from Bangladesh with beaches, local food, budget-friendly stays, and relaxed sightseeing.">
               <span aria-hidden="true">🏝️</span> Thailand escape
             </button>
           </div>
 
           <div class="submit-row">
             <span class="keyboard-hint">Pro tip: press <kbd>Ctrl</kbd> + <kbd>Enter</kbd></span>
-            <button id="sendBtn" type="button" onclick="sendMessage()">
+            <button id="sendBtn" type="button" data-action="send">
               <span id="btnText">Create my draft <span aria-hidden="true">→</span></span>
               <span id="btnLoader" class="loader hidden" aria-label="Planning"></span>
             </button>
@@ -104,6 +132,12 @@
           </div>
         </aside>
       </div>
+    </section>
+
+    <section id="progressSection" class="progress-section hidden" aria-live="polite" aria-labelledby="progressTitle">
+      <h2 id="progressTitle">Working on your trip</h2>
+      <p class="progress-note">This usually takes under a minute. You can leave this page; your plan will be saved under Your trips.</p>
+      <ul id="progressList" class="progress-list"></ul>
     </section>
 
     <section id="workflowSection" class="workflow-section hidden" aria-live="polite">
@@ -133,8 +167,8 @@
           <p id="threadInfo">Trip reference: -</p>
         </div>
         <div class="result-actions">
-          <button class="copy-btn" type="button" onclick="copyResult()">Copy plan</button>
-          <button class="download-btn" type="button" onclick="downloadPDF()">Download PDF <span aria-hidden="true">↓</span></button>
+          <button class="copy-btn" type="button" data-action="copy">Copy plan</button>
+          <button class="download-btn" type="button" data-action="pdf">Download PDF <span aria-hidden="true">↓</span></button>
         </div>
       </div>
 
@@ -161,10 +195,10 @@
         ></textarea>
 
         <div class="approval-actions">
-          <button id="approveBtn" class="approve-btn" type="button" onclick="submitApproval(true)">
+          <button id="approveBtn" class="approve-btn" type="button" data-action="approve">
             Looks good, finalize <span aria-hidden="true">→</span>
           </button>
-          <button id="reviseBtn" class="revise-btn" type="button" onclick="submitApproval(false)">
+          <button id="reviseBtn" class="revise-btn" type="button" data-action="revise">
             Request changes
           </button>
         </div>
@@ -179,8 +213,9 @@
     <span>Built with FastAPI · LangGraph · MCP</span>
   </footer>
 
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-  <script src="/static/script.js?v=3"></script>
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <script src="/static/vendor/html2pdf.bundle.min.js"></script>
+  <script src="/static/script.js?v=5"></script>
 </body>
 </html>

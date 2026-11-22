@@ -1,22 +1,74 @@
+"""TripMate AI - FastAPI application.
+
+Routes are plain ``def`` handlers so FastAPI runs them in its thread pool: a
+long LangGraph run no longer blocks the event loop, ``/health`` or other
+requests (F-12).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import contextvars
+import json
+import logging
+import queue
+import threading
+import time
 from pathlib import Path
-import traceback
+from urllib.parse import urlparse
 
 import uvicorn
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import Depends, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from backend import run_travel_agent, resume_travel_agent
+import backend
+import config
+import security
 
-# This is kept from the original project to allow the existing synchronous
-# agent functions to call async MCP helpers inside FastAPI.
-import nest_asyncio
-
-nest_asyncio.apply()
+config.configure_logging()
+logger = logging.getLogger("tripmate.api")
 
 BASE_DIR = Path(__file__).resolve().parent
+SESSION_COOKIE = "tm_session"
+THREAD_ID_PATTERN = r"^trip_[0-9a-f]{32}$"
+PURGE_INTERVAL_SECONDS = 6 * 3600
+
+CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
+
+
+# =========================
+# Lifespan: initialise and tear down resources (F-30)
+# =========================
+async def _purge_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(backend.purge_expired)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Retention purge failed: %s: %s", type(exc).__name__, exc)
+        await asyncio.sleep(PURGE_INTERVAL_SECONDS)
+
+
+@contextlib.asynccontextmanager
+async def lifespan(_: FastAPI):
+    await asyncio.to_thread(backend.init_backend)
+    purge_task = asyncio.create_task(_purge_loop())
+    try:
+        yield
+    finally:
+        purge_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await purge_task
+        await asyncio.to_thread(backend.shutdown_backend)
+
 
 app = FastAPI(
     title="TripMate AI",
@@ -24,137 +76,397 @@ app = FastAPI(
         "LangGraph Multi-Agent Travel Planner with Supervisor, Guardrails, "
         "Human-in-the-Loop, and FastAPI Frontend"
     ),
-    version="2.0.0",
+    version="2.1.0",
+    lifespan=lifespan,
 )
 
-app.mount(
-    "/static",
-    StaticFiles(directory=str(BASE_DIR / "static")),
-    name="static",
-)
-
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
+# =========================
+# Models (bounded input: F-09)
+# =========================
 class TravelRequest(BaseModel):
-    message: str
-    thread_id: str | None = None
+    message: str = Field(max_length=config.MAX_MESSAGE_CHARS)
+
+    @field_validator("message")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Message cannot be empty.")
+        return value
 
 
 class ApprovalRequest(BaseModel):
-    thread_id: str = Field(min_length=1)
+    thread_id: str = Field(pattern=THREAD_ID_PATTERN)
     approved: bool
-    feedback: str = ""
+    feedback: str = Field(default="", max_length=config.MAX_FEEDBACK_CHARS)
 
 
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    return templates.TemplateResponse(
-        request=request,
-        name="index.html",
-        context={},
+class LoginRequest(BaseModel):
+    access_key: str = Field(default="", max_length=200)
+
+
+# =========================
+# Helpers
+# =========================
+def _error(status: int, message: str, headers: dict[str, str] | None = None, **extra):
+    from config import request_id_var
+
+    return JSONResponse(
+        status_code=status,
+        content={"success": False, "error": message, "request_id": request_id_var.get(), **extra},
+        headers=headers,
     )
 
 
-@app.post("/api/travel")
-async def travel_planner(request_data: TravelRequest):
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _set_session_cookie(response: Response, request: Request, sid: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        security.issue_session_token(sid),
+        max_age=config.SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="strict",
+        secure=request.url.scheme == "https",
+        path="/",
+    )
+
+
+def current_session(request: Request) -> str:
+    """Dependency: the caller's verified session id, or 401."""
+    sid = security.verify_session_token(request.cookies.get(SESSION_COOKIE))
+    if not sid:
+        raise _AuthError()
+    return sid
+
+
+class _AuthError(Exception):
+    pass
+
+
+@app.exception_handler(_AuthError)
+async def _auth_error_handler(request: Request, exc: _AuthError):
+    return _error(
+        401,
+        "Please sign in to continue." if security.auth_required() else "Session expired. Please reload the page.",
+        auth_required=security.auth_required(),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_handler(request: Request, exc: RequestValidationError):
+    first = exc.errors()[0] if exc.errors() else {}
+    message = str(first.get("msg", "Invalid request.")).removeprefix("Value error, ")
+    field = ".".join(str(part) for part in first.get("loc", [])[1:])
+    return _error(400, f"{field}: {message}" if field and "empty" not in message.lower() else message)
+
+
+def _failure_parts(exc: Exception, what: str) -> tuple[int, str, dict[str, str]]:
+    """Map internal failures to a safe (status, message, headers) (F-07, F-17)."""
+    if isinstance(exc, backend.ThreadNotFoundError):
+        return 404, "Trip not found.", {}
+    if isinstance(exc, backend.ThreadStateError):
+        return 409, str(exc), {}
+
     try:
-        user_message = request_data.message.strip()
+        import groq
+    except ImportError:  # pragma: no cover
+        groq = None
 
-        if not user_message:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": "Message cannot be empty.",
-                },
-            )
+    if groq is not None:
+        if isinstance(exc, groq.RateLimitError):
+            retry = "30"
+            with contextlib.suppress(Exception):
+                retry = str(int(float(exc.response.headers.get("retry-after", "30"))) or 30)
+            logger.warning("%s: upstream rate limit", what)
+            return 429, "The AI service is busy right now. Please try again shortly.", {"Retry-After": retry}
+        if isinstance(exc, (groq.APITimeoutError, groq.APIConnectionError)):
+            logger.warning("%s: upstream unavailable: %s", what, type(exc).__name__)
+            return 503, "The AI service is temporarily unavailable. Please try again.", {}
 
-        result = run_travel_agent(
-            user_input=user_message,
-            thread_id=request_data.thread_id,
-        )
+    logger.exception("%s failed", what)
+    from config import request_id_var
 
-        return JSONResponse(
-            content={
-                "success": True,
-                **result,
-            }
-        )
-
-    except Exception as exc:
-        print("ERROR:", exc)
-        traceback.print_exc()
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": str(exc),
-            },
-        )
+    return 500, f"Something went wrong. Please try again. (reference {request_id_var.get()})", {}
 
 
-@app.post("/api/travel/approve")
-async def approve_travel_plan(request_data: ApprovalRequest):
+def _handle_failure(exc: Exception, what: str) -> JSONResponse:
+    status, message, headers = _failure_parts(exc, what)
+    return _error(status, message, headers=headers or None)
+
+
+# =========================
+# Middleware: request id, CSRF origin check, security headers, access log
+# =========================
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    from config import new_request_id, request_id_var
+
+    request_id = new_request_id()
+    token = request_id_var.set(request_id)
+    started = time.perf_counter()
+
     try:
-        if not request_data.approved and not request_data.feedback.strip():
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "success": False,
-                    "error": "Please provide revision feedback when rejecting the draft.",
-                },
-            )
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            origin = request.headers.get("origin")
+            if origin and urlparse(origin).netloc != request.headers.get("host"):
+                response = _error(403, "Cross-origin request blocked.")
+                return response
 
-        result = resume_travel_agent(
-            thread_id=request_data.thread_id,
-            approved=request_data.approved,
-            feedback=request_data.feedback,
+        response = await call_next(request)
+    finally:
+        request_id_var.reset(token)
+
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = CSP
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+
+    if request.url.path not in {"/health", "/favicon.ico"} and not request.url.path.startswith("/static"):
+        logger.info(
+            "%s %s -> %s in %dms",
+            request.method,
+            request.url.path,
+            response.status_code,
+            (time.perf_counter() - started) * 1000,
         )
-
-        return JSONResponse(
-            content={
-                "success": True,
-                **result,
-            }
-        )
-
-    except Exception as exc:
-        print("APPROVAL ERROR:", exc)
-        traceback.print_exc()
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "success": False,
-                "error": str(exc),
-            },
-        )
+    return response
 
 
-@app.get("/health")
-async def health_check():
+# =========================
+# Pages and session
+# =========================
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return templates.TemplateResponse(request=request, name="index.html", context={})
+
+
+@app.get("/api/session")
+def session_status(request: Request, response: Response):
+    """Bootstrap: report auth state; in open mode, issue an anonymous session."""
+    sid = security.verify_session_token(request.cookies.get(SESSION_COOKIE))
+
+    if not sid and not security.auth_required():
+        sid = security.new_session_id()
+        _set_session_cookie(response, request, sid)
+
     return {
-        "status": "ok",
-        "message": "TripMate AI API is running",
-        "features": [
-            "supervisor_agent",
-            "input_guardrail",
-            "human_in_the_loop",
-        ],
+        "success": True,
+        "authenticated": bool(sid),
+        "auth_required": security.auth_required(),
     }
 
 
-@app.get("/favicon.ico")
-async def favicon():
-    return JSONResponse(content={})
+@app.post("/api/session")
+def login(body: LoginRequest, request: Request):
+    if not security.auth_required():
+        response = JSONResponse({"success": True, "authenticated": True})
+        _set_session_cookie(response, request, security.new_session_id())
+        return response
+
+    ip = _client_ip(request)
+    wait = security.login_failures.retry_after(ip)
+    if wait:
+        return _error(429, "Too many attempts. Please wait and try again.", headers={"Retry-After": str(wait)})
+
+    if not security.access_key_matches(body.access_key):
+        security.login_failures.record(ip)
+        logger.warning("Failed login from %s", ip)
+        return _error(401, "That access key is not valid.", auth_required=True)
+
+    response = JSONResponse({"success": True, "authenticated": True})
+    _set_session_cookie(response, request, security.new_session_id())
+    return response
+
+
+@app.delete("/api/session")
+def logout():
+    response = JSONResponse({"success": True})
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return response
+
+
+# =========================
+# Trip API
+# =========================
+@app.post("/api/travel")
+def travel_planner(body: TravelRequest, sid: str = Depends(current_session)):
+    wait = security.acquire_plan_quota(sid)
+    if wait:
+        return _error(
+            429,
+            "You have reached the planning limit for now. Please try again later.",
+            headers={"Retry-After": str(wait)},
+        )
+
+    try:
+        return {"success": True, **backend.start_trip(sid, body.message)}
+    except Exception as exc:  # noqa: BLE001
+        return _handle_failure(exc, "start_trip")
+
+
+@app.post("/api/travel/approve")
+def approve_travel_plan(body: ApprovalRequest, sid: str = Depends(current_session)):
+    if not body.approved and not body.feedback.strip():
+        return _error(400, "Please provide revision feedback when rejecting the draft.")
+
+    try:
+        return {
+            "success": True,
+            **backend.resume_trip(sid, body.thread_id, body.approved, body.feedback),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return _handle_failure(exc, "resume_trip")
+
+
+# =========================
+# Streaming variants: live progress as NDJSON (one JSON object per line)
+# =========================
+def _ndjson_stream(work, what: str) -> StreamingResponse:
+    """Run ``work(emit)`` in a background thread and relay its events.
+
+    The run is NOT tied to the connection: if the browser goes away the plan
+    still finishes and is saved, so it can be restored from "Your trips".
+    """
+    from config import request_id_var
+
+    events: queue.Queue = queue.Queue()
+    request_id = request_id_var.get()
+
+    def worker() -> None:
+        try:
+            payload = work(events.put)
+            events.put({"type": "result", "success": True, **payload})
+        except Exception as exc:  # noqa: BLE001
+            status, message, headers = _failure_parts(exc, what)
+            events.put(
+                {
+                    "type": "error",
+                    "success": False,
+                    "status": status,
+                    "error": message,
+                    "retry_after": headers.get("Retry-After"),
+                    "request_id": request_id,
+                }
+            )
+        finally:
+            events.put(None)
+
+    context = contextvars.copy_context()
+    threading.Thread(target=context.run, args=(worker,), name=f"{what}-stream", daemon=True).start()
+
+    def relay():
+        while True:
+            try:
+                item = events.get(timeout=15)
+            except queue.Empty:
+                yield b'{"type":"ping"}\n'  # keeps proxies from closing an idle stream
+                continue
+            if item is None:
+                return
+            yield (json.dumps(item) + "\n").encode()
+
+    return StreamingResponse(
+        relay(),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/travel/stream")
+def travel_planner_stream(body: TravelRequest, sid: str = Depends(current_session)):
+    wait = security.acquire_plan_quota(sid)
+    if wait:
+        return _error(
+            429,
+            "You have reached the planning limit for now. Please try again later.",
+            headers={"Retry-After": str(wait)},
+        )
+    return _ndjson_stream(lambda emit: backend.start_trip(sid, body.message, on_event=emit), "start_trip")
+
+
+@app.post("/api/travel/approve/stream")
+def approve_travel_plan_stream(body: ApprovalRequest, sid: str = Depends(current_session)):
+    if not body.approved and not body.feedback.strip():
+        return _error(400, "Please provide revision feedback when rejecting the draft.")
+    try:
+        backend.check_resumable(sid, body.thread_id)  # 404/409 stay real HTTP statuses
+    except Exception as exc:  # noqa: BLE001
+        return _handle_failure(exc, "resume_trip")
+    return _ndjson_stream(
+        lambda emit: backend.resume_trip(sid, body.thread_id, body.approved, body.feedback, on_event=emit),
+        "resume_trip",
+    )
+
+
+@app.get("/api/travel/threads")
+def list_trips(sid: str = Depends(current_session)):
+    return {"success": True, "trips": backend.list_trips(sid)}
+
+
+@app.get("/api/travel/{thread_id}")
+def get_trip(thread_id: str, sid: str = Depends(current_session)):
+    if not _valid_thread_id(thread_id):
+        return _error(404, "Trip not found.")
+    try:
+        return {"success": True, **backend.get_trip(sid, thread_id)}
+    except Exception as exc:  # noqa: BLE001
+        return _handle_failure(exc, "get_trip")
+
+
+@app.delete("/api/travel/{thread_id}")
+def delete_trip(thread_id: str, sid: str = Depends(current_session)):
+    if not _valid_thread_id(thread_id):
+        return _error(404, "Trip not found.")
+    try:
+        backend.delete_trip(sid, thread_id)
+        return {"success": True}
+    except Exception as exc:  # noqa: BLE001
+        return _handle_failure(exc, "delete_trip")
+
+
+def _valid_thread_id(thread_id: str) -> bool:
+    import re
+
+    return bool(re.fullmatch(THREAD_ID_PATTERN, thread_id))
+
+
+# =========================
+# Operations
+# =========================
+@app.get("/health")
+def health_check():
+    """Liveness: cheap and dependency-free (used by the Docker healthcheck)."""
+    return {
+        "status": "ok",
+        "message": "TripMate AI API is running",
+        "features": ["supervisor_agent", "input_guardrail", "human_in_the_loop"],
+    }
+
+
+@app.get("/ready")
+def readiness_check():
+    """Readiness: verifies the database is reachable."""
+    state = backend.check_ready()
+    return JSONResponse(status_code=200 if state["ready"] else 503, content=state)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "app:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True,
-    )
+    uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)

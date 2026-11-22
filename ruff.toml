@@ -1,0 +1,8 @@
+# Lint configuration (CI runs: ruff check .)
+line-length = 120
+target-version = "py312"
+extend-exclude = [".venv", "static"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008"]

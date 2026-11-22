@@ -1,22 +1,25 @@
 # Production deployment for a Linux VPS with PostgreSQL and Nginx on the host.
 # Nginx (TLS) -> 127.0.0.1:8014 -> this FastAPI application.
 #
-# Deploy with: bash deploy/deploy.sh
-# The app uses host networking to reach PostgreSQL on 127.0.0.1:5432.
+# Deploy with: bash deploy/deploy.sh          (rollback: bash deploy/deploy.sh rollback)
+# The app uses host networking to reach PostgreSQL on 127.0.0.1:5432. This is
+# a deliberate trade-off: switching to a bridge network would require the host
+# PostgreSQL to listen on the Docker bridge address, which is a host-level
+# change. The container still binds to loopback only.
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: tripmate-ai:latest
+    # deploy.sh sets TRIPMATE_VERSION to the git commit so each release has
+    # its own tag and can be rolled back.
+    image: tripmate-ai:${TRIPMATE_VERSION:-latest}
     container_name: tripmate-ai
     restart: unless-stopped
     init: true
     network_mode: host
     env_file:
       - .env.production
-    environment:
-      UV_CACHE_DIR: /home/tripmate/.cache/uv
     command:
       - uvicorn
       - app:app
@@ -28,8 +31,6 @@ services:
       - --forwarded-allow-ips=127.0.0.1
       - --timeout-graceful-shutdown
       - "15"
-    volumes:
-      - uv_cache:/home/tripmate/.cache/uv
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -47,6 +48,3 @@ services:
       start_period: 90s
       retries: 3
     stop_grace_period: 20s
-
-volumes:
-  uv_cache:

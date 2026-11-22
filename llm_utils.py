@@ -1,12 +1,52 @@
+"""Token budgeting, bounded LLM calls, and central LLM-call accounting."""
+
+from __future__ import annotations
+
+import contextvars
+import functools
+import logging
+import time
 from typing import Any
 
 import tiktoken
 from langchain_core.messages import HumanMessage, SystemMessage
 
+import config
 
-MAX_LLM_INPUT_TOKENS = 5200
-MAX_LLM_OUTPUT_TOKENS = 768
+logger = logging.getLogger(__name__)
+
+MAX_LLM_INPUT_TOKENS = config.LLM_MAX_INPUT_TOKENS
+MAX_LLM_OUTPUT_TOKENS = config.LLM_OUTPUT_TOKENS
 _TOKENIZER = tiktoken.get_encoding("o200k_base")
+
+# Per-node counter of LLM calls (F-23). Each graph node runs in its own
+# context, so parallel nodes never share a counter.
+_call_counter: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar(
+    "llm_call_counter", default=None
+)
+
+
+def counts_llm_calls(node):
+    """Decorator: add the number of LLM calls the node made to its update.
+
+    The graph state field ``llm_calls`` uses an additive reducer, so nodes
+    return only their own delta.
+    """
+
+    @functools.wraps(node)
+    def wrapper(*args, **kwargs):
+        counter = [0]
+        token = _call_counter.set(counter)
+        try:
+            update = node(*args, **kwargs)
+        finally:
+            _call_counter.reset(token)
+
+        update = dict(update or {})
+        update["llm_calls"] = counter[0]
+        return update
+
+    return wrapper
 
 
 def truncate_context(value: Any, max_tokens: int = 700) -> str:
@@ -24,16 +64,28 @@ def truncate_context(value: Any, max_tokens: int = 700) -> str:
     )
 
 
+def fence(tag: str, value: Any, max_tokens: int) -> str:
+    """Wrap untrusted text in a labelled block (F-08).
+
+    The closing tag is stripped from the content so it cannot break out of
+    the block, and the content is truncated to its token budget.
+    """
+
+    text = truncate_context(value, max_tokens)
+    for marker in (f"</{tag}>", f"<{tag}>"):
+        text = text.replace(marker, "")
+    return f"<{tag}>\n{text}\n</{tag}>"
+
+
 def invoke_with_token_budget(
     llm: Any,
     system_prompt: str,
     user_prompt: str,
+    max_output_tokens: int | None = None,
 ):
     """Bound each prompt while preserving its opening context and final instructions."""
 
-    system_tokens = len(
-        _TOKENIZER.encode(system_prompt, disallowed_special=())
-    )
+    system_tokens = len(_TOKENIZER.encode(system_prompt, disallowed_special=()))
     prompt_tokens = _TOKENIZER.encode(user_prompt, disallowed_special=())
     available_tokens = max(1, MAX_LLM_INPUT_TOKENS - system_tokens - 64)
 
@@ -45,16 +97,34 @@ def invoke_with_token_budget(
         )
         prefix_budget = available_tokens - suffix_budget - len(marker)
         prompt_tokens = (
-            prompt_tokens[:prefix_budget]
-            + marker
-            + prompt_tokens[-suffix_budget:]
+            prompt_tokens[:prefix_budget] + marker + prompt_tokens[-suffix_budget:]
         )
         user_prompt = _TOKENIZER.decode(prompt_tokens)
 
-    return llm.invoke(
+    counter = _call_counter.get()
+    if counter is not None:
+        counter[0] += 1
+
+    started = time.perf_counter()
+    response = llm.invoke(
         [
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt),
         ],
-        max_tokens=MAX_LLM_OUTPUT_TOKENS,
+        max_tokens=max_output_tokens or MAX_LLM_OUTPUT_TOKENS,
     )
+
+    usage = getattr(response, "usage_metadata", None) or {}
+    meta = getattr(response, "response_metadata", None) or {}
+    finish = meta.get("finish_reason", "")
+    logger.info(
+        "llm_call ms=%d input_tokens=%s output_tokens=%s finish=%s",
+        (time.perf_counter() - started) * 1000,
+        usage.get("input_tokens", "?"),
+        usage.get("output_tokens", "?"),
+        finish or "?",
+    )
+    if finish == "length":
+        logger.warning("LLM output hit the max_tokens cap; the answer may be cut off.")
+
+    return response

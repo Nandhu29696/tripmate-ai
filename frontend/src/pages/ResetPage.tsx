@@ -37,7 +37,9 @@ export function ResetPage() {
     event.preventDefault();
     setError("");
     if (!password) {
-      setError("Please choose a new password.");
+      const message = "Please choose a new password.";
+      setError(message);
+      toast.error(message);
       return;
     }
     setBusy(true);
@@ -47,7 +49,9 @@ export function ResetPage() {
       toast.success("Your password was changed. You are signed in.");
       navigate("/", { replace: true });
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : "Something went wrong. Please try again.");
+      const message = caught instanceof ApiError ? caught.message : "Something went wrong. Please try again.";
+      setError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }

@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import { Icon } from "../components/Icon";
 import { Button, Field, PasswordField } from "../components/ui";
 import { useAuth } from "../context/AuthContext";
+import { useToast } from "../context/ToastContext";
 import { returnPath } from "../utils/format";
 
 type Mode = "signin" | "signup";
@@ -21,6 +22,7 @@ function GoogleLogo() {
 
 export function LoginPage() {
   const { signIn, signUp, providers } = useAuth();
+  const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
@@ -30,26 +32,20 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [sentTo, setSentTo] = useState("");
 
   const from = returnPath(location.state);
 
   const switchMode = (next: Mode) => {
     setParams(next === "signup" ? { mode: "signup" } : {}, { replace: true });
-    setError("");
-    setNotice("");
     setSentTo("");
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setError("");
-    setNotice("");
 
     if (!email.trim() || !password) {
-      setError("Please enter your email and password.");
+      toast.error("Please enter your email and password.");
       return;
     }
 
@@ -57,17 +53,19 @@ export function LoginPage() {
     try {
       if (mode === "signup") {
         await signUp(email.trim(), password, name.trim());
+        toast.success(`Confirmation email sent to ${email.trim()}.`);
         setSentTo(email.trim());
         setPassword("");
       } else {
         await signIn(email.trim(), password);
+        toast.success("You signed in successfully.");
         navigate(from, { replace: true });
       }
     } catch (caught) {
       if (caught instanceof ApiError && caught.code === "email_not_verified") {
-        setNotice(caught.message);
+        toast.info(caught.message);
       } else {
-        setError(caught instanceof ApiError ? caught.message : "Something went wrong. Please try again.");
+        toast.error(caught instanceof ApiError ? caught.message : "Something went wrong. Please try again.");
       }
     } finally {
       setBusy(false);
@@ -119,17 +117,6 @@ export function LoginPage() {
       )}
 
       <form onSubmit={(event) => void submit(event)} noValidate className="form-stack">
-        {error && (
-          <div className="banner banner-error" role="alert">
-            <Icon name="alert" size={18} /> {error}
-          </div>
-        )}
-        {notice && (
-          <div className="banner banner-info" role="status">
-            <Icon name="mail" size={18} /> {notice}
-          </div>
-        )}
-
         {mode === "signup" && <Field label="Your name (optional)" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" maxLength={80} />}
         <Field label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" maxLength={254} required />
         <PasswordField

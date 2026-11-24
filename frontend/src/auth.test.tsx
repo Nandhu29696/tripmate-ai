@@ -32,6 +32,7 @@ describe("route protection", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByRole("heading", { name: "Draft itinerary" })).toBeInTheDocument();
+    expect(await screen.findByText("You signed in successfully.", { selector: ".toast span" })).toBeInTheDocument();
     expect(endpoints.login).toHaveBeenCalledWith("ada@example.com", "correct horse battery");
   });
 
@@ -148,6 +149,7 @@ describe("create account", () => {
 
     expect(await screen.findByRole("heading", { name: "Check your email" })).toBeInTheDocument();
     expect(screen.getByText("ada@example.com")).toBeInTheDocument();
+    expect(await screen.findByText("Confirmation email sent to ada@example.com.", { selector: ".toast span" })).toBeInTheDocument();
     expect(endpoints.register).toHaveBeenCalledWith("ada@example.com", "correct horse battery", "Ada");
   });
 
@@ -194,7 +196,8 @@ describe("forgot and reset password", () => {
     await user.click(screen.getByRole("button", { name: "Send reset link" }));
 
     expect(await screen.findByRole("heading", { name: "Check your email" })).toBeInTheDocument();
-    expect(screen.getByText(/If an account exists/)).toBeInTheDocument();
+    expect(screen.getByText(/If an account exists/, { selector: ".auth-success p" })).toBeInTheDocument();
+    expect(await screen.findByText(/If an account exists/, { selector: ".toast span" })).toBeInTheDocument();
   });
 
   it("rejects a reset page opened without a token", async () => {
@@ -227,7 +230,8 @@ describe("forgot and reset password", () => {
     await user.type(await screen.findByLabelText("New password"), "a brand new passphrase");
     await user.click(screen.getByRole("button", { name: "Set new password" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("expired");
+    expect(await screen.findByText(/expired/, { selector: ".toast span" })).toBeInTheDocument();
+    expect(screen.getByText(/expired/, { selector: ".banner-error" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Request a new link" })).toBeInTheDocument();
   });
 });

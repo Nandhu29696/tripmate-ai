@@ -6,9 +6,9 @@ import remarkGfm from "remark-gfm";
  * raw HTML, and it drops unsafe URL schemes such as javascript:, so untrusted
  * model or search text cannot run script. Links open in a new tab safely.
  */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children, className = "" }: { children: string; className?: string }) {
   return (
-    <div className="prose">
+    <div className={`prose ${className}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

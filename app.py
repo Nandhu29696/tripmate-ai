@@ -23,9 +23,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+import admin_routes
 import auth_routes
 import backend
 import config
+import observability
 import security
 import spa
 import web_common as web
@@ -75,11 +77,12 @@ app = FastAPI(
         "LangGraph Multi-Agent Travel Planner with Supervisor, Guardrails, "
         "Human-in-the-Loop, and FastAPI Frontend"
     ),
-    version="2.1.0",
+    version="2.2.0",
     lifespan=lifespan,
 )
 
 app.include_router(auth_routes.router)
+app.include_router(admin_routes.router)
 
 
 # =========================
@@ -112,6 +115,11 @@ _error = web.error_response
 @app.exception_handler(web.AuthError)
 async def _auth_error_handler(request: Request, exc: web.AuthError):
     return _error(401, "Please sign in to continue.", auth_required=True)
+
+
+@app.exception_handler(web.ForbiddenError)
+async def _forbidden_handler(request: Request, exc: web.ForbiddenError):
+    return _error(403, "You do not have access to this.")
 
 
 @app.exception_handler(RequestValidationError)
@@ -166,6 +174,23 @@ async def request_context(request: Request, call_next):
     request_id = new_request_id()
     token = request_id_var.set(request_id)
     started = time.perf_counter()
+    response = None
+    logged = False
+
+    def log_request(status: int) -> None:
+        nonlocal logged
+        if logged:
+            return
+        logged = True
+        observability.record_request(
+            request.method,
+            request.url.path,
+            status,
+            (time.perf_counter() - started) * 1000,
+            getattr(request.state, "user_id", None),
+            web.client_ip(request),
+            request_id,
+        )
 
     try:
         if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
@@ -177,6 +202,25 @@ async def request_context(request: Request, call_next):
         response = await call_next(request)
     finally:
         request_id_var.reset(token)
+        if response is None:
+            log_request(500)
+        elif not hasattr(response, "body_iterator"):
+            log_request(response.status_code)  # not streamed: the work is already done
+
+    # Streamed responses (live planning progress) do their work while the body is sent, so
+    # their duration is only known when the last chunk has gone out.
+    if hasattr(response, "body_iterator"):
+        original = response.body_iterator
+        status_code = response.status_code
+
+        async def timed_body():
+            try:
+                async for chunk in original:
+                    yield chunk
+            finally:
+                log_request(status_code)
+
+        response.body_iterator = timed_body()
 
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"

@@ -82,6 +82,7 @@ def _redirect(path: str) -> RedirectResponse:
 
 
 def _signed_in(request: Request, response, user: dict) -> None:
+    web.promote_configured_admin(user)
     _users().touch_login(user["id"])
     web.set_session_cookie(response, request, user["id"])
 

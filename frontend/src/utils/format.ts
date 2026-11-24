@@ -60,3 +60,15 @@ export function returnPath(state: unknown): string {
   const from = (state as { from?: unknown } | null)?.from;
   return typeof from === "string" && from.startsWith("/") && !from.startsWith("//") && !from.startsWith("/login") ? from : "/";
 }
+
+/** "24 Nov, 14:05:09" in the viewer's locale and time zone. */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return "-";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "-";
+  return `${date.toLocaleDateString(undefined, { day: "numeric", month: "short" })}, ${date.toLocaleTimeString(undefined, { hour12: false })}`;
+}
+
+export function formatMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`;
+}

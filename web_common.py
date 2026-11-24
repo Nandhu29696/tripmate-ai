@@ -18,6 +18,10 @@ class AuthError(Exception):
     """The caller is not signed in (or the session was revoked)."""
 
 
+class ForbiddenError(Exception):
+    """The caller is signed in but not allowed to do this."""
+
+
 def error_response(status: int, message: str, headers: dict[str, str] | None = None, **extra):
     return JSONResponse(
         status_code=status,
@@ -53,6 +57,18 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/")
 
 
+def is_admin(user: dict[str, Any]) -> bool:
+    return user.get("role") == "admin" and user.get("email_verified", False)
+
+
+def promote_configured_admin(user: dict[str, Any]) -> dict[str, Any]:
+    """Make a verified user an administrator if their address is in ADMIN_EMAILS."""
+    if user["email"] in config.ADMIN_EMAILS and user["email_verified"] and user.get("role") != "admin":
+        backend.get_user_store().set_role(user["id"], "admin")
+        return backend.get_user_store().get(user["id"]) or user
+    return user
+
+
 def optional_user(request: Request) -> dict[str, Any] | None:
     """The signed-in user, or None. Rejects revoked sessions and disabled users."""
     payload = security.read_session_token(request.cookies.get(SESSION_COOKIE))
@@ -64,6 +80,7 @@ def optional_user(request: Request) -> dict[str, Any] | None:
         return None
     if float(payload.get("iat", 0)) < user["sessions_valid_after"]:
         return None  # issued before a password reset / revocation
+    request.state.user_id = user["id"]  # for the request log
     return user
 
 
@@ -71,6 +88,18 @@ def current_user(request: Request) -> dict[str, Any]:
     user = optional_user(request)
     if user is None:
         raise AuthError()
+    return user
+
+
+def current_admin(request: Request) -> dict[str, Any]:
+    """Dependency for /api/admin/*: signed in AND an administrator, else 403.
+
+    The role is read from the database on every call, so demoting or disabling an
+    admin takes effect immediately, not when their cookie expires.
+    """
+    user = current_user(request)
+    if not is_admin(user):
+        raise ForbiddenError()
     return user
 
 
@@ -85,4 +114,5 @@ def public_user(user: dict[str, Any]) -> dict[str, Any]:
         "name": user["name"] or user["email"].split("@")[0],
         "has_password": user["has_password"],
         "has_google": user["has_google"],
+        "role": "admin" if is_admin(user) else "user",
     }

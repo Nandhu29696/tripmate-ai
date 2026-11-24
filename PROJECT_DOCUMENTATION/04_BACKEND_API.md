@@ -52,3 +52,22 @@ Authentication: a signed, HttpOnly, SameSite=Lax session cookie names the user i
 ## Trace: new trip
 
 `script.js sendMessage` -> `POST /api/travel` -> `current_session` (verify cookie) -> `acquire_plan_quota` -> `backend.start_trip` (registry row, `graph.invoke` in a worker thread) -> supervisor (1 LLM call) -> parallel agents (MCP sessions reused) -> budget -> itinerary -> `interrupt` -> checkpoints in Postgres -> `_serialize_result` -> JSON.
+
+## Admin API (v2.2)
+
+All routes need a signed-in administrator (401 if signed out, 403 otherwise) and every change is audited.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/admin/overview` | user/trip counts, 24 h request stats (+ hourly series), SQL summary, readiness |
+| `GET /api/admin/users?q&limit&offset` | list/search users with trip counts |
+| `PATCH /api/admin/users/{id}` | `role`, `is_active`, `verify_email`; cannot target self; admin needs verified email |
+| `POST /api/admin/users/{id}/revoke-sessions` | sign the user out everywhere |
+| `DELETE /api/admin/users/{id}` | delete user and trips |
+| `GET /api/admin/trips?status&owner` / `DELETE /api/admin/trips/{id}` | trip metadata, delete |
+| `GET /api/admin/logs/requests` | filters: status (`4xx` or exact), method, path, user_id, min_ms |
+| `GET /api/admin/logs/sql` | filters: q, slow, errors |
+| `GET /api/admin/logs/audit` | admin actions |
+| `GET /api/admin/system`, `POST /api/admin/system/purge` | read-only non-secret settings; run retention now |
+
+`GET /api/session` now returns `user.role`. Middleware records every request (except `/health`, `/ready`, `/assets`) in `observability`; streamed responses are timed until the last chunk.

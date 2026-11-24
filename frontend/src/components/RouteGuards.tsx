@@ -61,3 +61,10 @@ export function FlashMessages() {
 
   return null;
 }
+
+/** Pages for administrators. The server enforces this too; this only avoids showing a dead page. */
+export function RequireAdmin() {
+  const { user } = useAuth();
+  if (user?.role !== "admin") return <Navigate to="/" replace />;
+  return <Outlet />;
+}

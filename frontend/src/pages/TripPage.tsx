@@ -5,8 +5,8 @@ import * as endpoints from "../api/endpoints";
 import type { TripPayload } from "../api/types";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Icon, type IconName } from "../components/Icon";
-import { Markdown } from "../components/Markdown";
 import { ProgressSteps } from "../components/ProgressSteps";
+import { TripPlan } from "../components/TripPlan";
 import { Badge, Button, Card, Skeleton, TextArea } from "../components/ui";
 import { useToast } from "../context/ToastContext";
 import { useTrips } from "../context/TripsContext";
@@ -218,7 +218,7 @@ export function TripPage() {
               <h2 className="card-title">{awaiting ? "Draft itinerary" : "Your final plan"}</h2>
               <span className="muted small print-only">TripMate AI</span>
             </div>
-            <Markdown>{planText}</Markdown>
+            <TripPlan markdown={planText} />
           </article>
 
           <aside className="trip-side no-print">

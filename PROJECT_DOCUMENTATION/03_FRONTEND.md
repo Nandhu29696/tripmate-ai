@@ -64,3 +64,10 @@ draft returns for another review until the revision limit, then the final plan.
   (not merely off-screen, so keyboards cannot reach it), `prefers-reduced-motion` respected.
 - Layout: long unbroken text (URLs, code) wraps or scrolls inside its box; verified at 390 px with worst-case content.
 - Print: "Save as PDF" uses the browser print dialog with a stylesheet that prints only the plan.
+
+## v2.2 additions
+
+- `components/TripPlan.tsx` + `utils/itinerary.ts`: parse the planner's markdown into at-a-glance tiles, a weather outlook, day cards (weather chip, rows, cost footer), a day-jump bar and plain sections. Plans that contain no `## Day N` headings fall back to plain markdown, so older trips still render. Tested in `utils/itinerary.test.ts` and `admin.test.tsx`.
+- Admin console under `/admin` (`pages/admin/`: Overview, Users, Trips, Logs, System) guarded by `RequireAdmin` (UI only; the server enforces access). `hooks/useLoad.ts` loads data, ignores stale responses and can poll.
+- `styles-v22.css`: brand gradient, stat cards, request chart, timeline, tables, print rules for day cards.
+- Tests: 101 (Vitest + Testing Library).

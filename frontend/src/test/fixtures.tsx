@@ -5,7 +5,7 @@ import { App } from "../App";
 import * as endpoints from "../api/endpoints";
 import type { Providers, SessionResponse, TripPayload, User } from "../api/types";
 
-export const USER: User = { email: "ada@example.com", name: "Ada Lovelace", has_password: true, has_google: false };
+export const USER: User = { email: "ada@example.com", name: "Ada Lovelace", has_password: true, has_google: false, role: "user" };
 
 export function session(authenticated: boolean, providers: Partial<Providers> = {}, user: User = USER): SessionResponse {
   return {

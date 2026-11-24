@@ -68,6 +68,12 @@ export function AppLayout() {
           <Icon name="plus" size={18} /> New trip
         </Link>
 
+        {user?.role === "admin" && (
+          <NavLink to="/admin" className={({ isActive }) => `admin-link${isActive ? " is-active" : ""}`}>
+            <Icon name="shield" size={18} /> Admin console
+          </NavLink>
+        )}
+
         <nav className="trip-nav" aria-label="Your trips">
           <h2 className="nav-heading">Your trips</h2>
           {loading && trips.length === 0 && <Skeleton lines={3} />}
@@ -91,7 +97,10 @@ export function AppLayout() {
           <Link to="/account" className="user-chip">
             <span className="avatar">{initials(name)}</span>
             <span className="user-chip-text">
-              <strong>{name}</strong>
+              <strong>
+                {name}
+                {user?.role === "admin" && <span className="role-pill">Admin</span>}
+              </strong>
               <span>{user?.email}</span>
             </span>
           </Link>

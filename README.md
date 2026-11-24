@@ -69,7 +69,7 @@ Flight data uses the version-pinned `aviationstack-mcp` server, started through 
 ## Tests and lint
 
 ```powershell
-python -m pytest -q      # 146 backend tests, no network or database
+python -m pytest -q      # 188 backend tests, no network or database
 ruff check .
 ```
 
@@ -130,11 +130,25 @@ cd frontend
 npm ci                  # install (uses package-lock.json)
 npm run build           # type-check + production build into frontend/dist (served by the API)
 npm run dev             # hot reload on http://localhost:5173, proxied to the API on :8000 (run python app.py too)
-npm test                # 75 tests (Vitest + Testing Library)
+npm test                # 101 tests (Vitest + Testing Library)
 npm run typecheck
 ```
 
 Note for Windows: npm runs scripts through `cmd.exe`, which cannot handle an `&` in the project path. If your checkout is in a folder like `... Safety & HITL`, run the tools directly (`node node_modules/vite/bin/vite.js build`) or move the project to a path without `&`. Docker and CI are not affected.
+
+## Admin console and logs
+
+Administrators get an **Admin console** (sidebar link, `/admin`): overview dashboard, user management (make/remove admin, verify, disable/enable, sign out everywhere, delete), trip list and deletion (metadata only, never plan text), and a **Logs** area with API requests, SQL queries and an audit trail of every admin action.
+
+- Become an admin: put your email in `ADMIN_EMAILS` (comma-separated) and sign in with a verified address. Roles are re-read from the database on every request.
+- API request log: method, path (never the query string), status, duration (streamed planning calls are timed to the end of the stream), user id, IP, request id. Stored in PostgreSQL (`api_request_logs`), kept `LOG_RETENTION_DAYS` (14).
+- SQL log: statement text and timing only; values are never recorded. Recent 2000 statements in memory; slow ones (`SLOW_QUERY_MS`, 200) are also logged at WARNING. `LOG_SQL=false` turns it off.
+- Audit trail: `admin_audit_log` table. Set `LOG_FILE` for a rotating server log file.
+- Safeguards: you cannot change, disable or delete yourself; only verified users can become admins.
+
+## Day-wise plans
+
+The draft and final plan use one fixed layout (at a glance, weather outlook, one card per day with weather, morning/afternoon/evening, getting around and estimated cost, budget summary, before you go). The web app parses it into cards; plans that do not follow the layout are shown as plain text.
 
 ## Accounts and Google sign-in
 

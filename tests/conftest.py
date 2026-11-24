@@ -149,6 +149,14 @@ def fresh_limiters(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fresh_observability():
+    import observability
+
+    observability.reset_memory()
+    yield
+
+
+@pytest.fixture(autouse=True)
 def fresh_flight_state(monkeypatch):
     monkeypatch.setattr(backend, "_routes_endpoint_available", True)
     backend._route_cache.clear()

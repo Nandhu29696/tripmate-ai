@@ -122,6 +122,14 @@ class UserStore(Protocol):
     def add_token(self, user_id: str, purpose: str, token_hash: str, ttl_seconds: int) -> None: ...
     def consume_token(self, token_hash: str, purpose: str) -> str | None: ...
     def delete_user(self, user_id: str) -> None: ...
+    def list_users(self, query: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]: ...
+    def set_role(self, user_id: str, role: str) -> None: ...
+    def set_active(self, user_id: str, active: bool) -> None: ...
+    def revoke_sessions(self, user_id: str) -> None: ...
+    def user_counts(self) -> dict[str, int]: ...
+
+
+ROLES = ("user", "admin")
 
 
 _USER_DDL = (
@@ -150,11 +158,12 @@ _USER_DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS auth_tokens_user_idx ON auth_tokens (user_id, purpose)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user'",
 )
 
 _USER_COLUMNS = (
     "id, email, email_verified, (password_hash IS NOT NULL) AS has_password, "
-    "(google_sub IS NOT NULL) AS has_google, name, is_active, created_at, last_login, "
+    "(google_sub IS NOT NULL) AS has_google, name, role, is_active, created_at, last_login, "
     "extract(epoch FROM sessions_valid_after) AS sessions_valid_after"
 )
 
@@ -262,6 +271,44 @@ class PostgresUserStore:
             conn.execute("DELETE FROM auth_tokens WHERE user_id = %s", (user_id,))
             conn.execute("DELETE FROM users WHERE id = %s", (user_id,))
 
+    def list_users(self, query="", limit=50, offset=0):
+        like = f"%{query.strip().lower()}%"
+        with self._pool.connection() as conn:
+            total = conn.execute(
+                "SELECT count(*) AS n FROM users WHERE lower(email) LIKE %s OR lower(name) LIKE %s", (like, like)
+            ).fetchone()["n"]
+            rows = conn.execute(
+                f"SELECT {_USER_COLUMNS} FROM users WHERE lower(email) LIKE %s OR lower(name) LIKE %s "
+                "ORDER BY created_at DESC LIMIT %s OFFSET %s",
+                (like, like, limit, offset),
+            ).fetchall()
+        return [_public(r) for r in rows], total
+
+    def set_role(self, user_id, role):
+        self._exec("UPDATE users SET role = %s WHERE id = %s", (role, user_id))
+
+    def set_active(self, user_id, active):
+        # Disabling also ends every session that exists right now.
+        self._exec(
+            "UPDATE users SET is_active = %s, sessions_valid_after = to_timestamp(%s) WHERE id = %s",
+            (active, time.time(), user_id),
+        )
+
+    def revoke_sessions(self, user_id):
+        self._exec("UPDATE users SET sessions_valid_after = to_timestamp(%s) WHERE id = %s", (time.time(), user_id))
+
+    def user_counts(self):
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS total, count(*) FILTER (WHERE email_verified) AS verified, "
+                "count(*) FILTER (WHERE role = 'admin') AS admins, "
+                "count(*) FILTER (WHERE NOT is_active) AS disabled, "
+                "count(*) FILTER (WHERE created_at > now() - interval '7 days') AS new_7d, "
+                "count(*) FILTER (WHERE google_sub IS NOT NULL) AS google "
+                "FROM users"
+            ).fetchone()
+        return {k: int(v) for k, v in row.items()}
+
     def purge_expired_tokens(self) -> None:
         self._exec("DELETE FROM auth_tokens WHERE expires_at < now() - interval '7 days'", ())
 
@@ -281,7 +328,7 @@ class InMemoryUserStore:
         return {
             "id": row["id"], "email": row["email"], "email_verified": row["email_verified"],
             "has_password": row["password_hash"] is not None, "has_google": row["google_sub"] is not None,
-            "name": row["name"], "is_active": row["is_active"],
+            "name": row["name"], "role": row.get("role", "user"), "is_active": row["is_active"],
             "created_at": row["created_at"].isoformat(), "last_login": row["last_login"],
             "sessions_valid_after": row["sessions_valid_after"],
         }
@@ -346,6 +393,34 @@ class InMemoryUserStore:
     def get_password_hash(self, user_id):
         row = self._users.get(user_id)
         return row["password_hash"] if row else None
+
+    def list_users(self, query="", limit=50, offset=0):
+        needle = query.strip().lower()
+        rows = [u for u in self._users.values() if needle in u["email"].lower() or needle in u["name"].lower()]
+        rows.sort(key=lambda u: u["created_at"], reverse=True)
+        return [self._view(r) for r in rows[offset: offset + limit]], len(rows)
+
+    def set_role(self, user_id, role):
+        self._users[user_id]["role"] = role
+
+    def set_active(self, user_id, active):
+        self._users[user_id]["is_active"] = active
+        self._users[user_id]["sessions_valid_after"] = time.time()
+
+    def revoke_sessions(self, user_id):
+        self._users[user_id]["sessions_valid_after"] = time.time()
+
+    def user_counts(self):
+        users = list(self._users.values())
+        week = datetime.now(UTC).timestamp() - 7 * 86400
+        return {
+            "total": len(users),
+            "verified": sum(1 for u in users if u["email_verified"]),
+            "admins": sum(1 for u in users if u.get("role") == "admin"),
+            "disabled": sum(1 for u in users if not u["is_active"]),
+            "new_7d": sum(1 for u in users if u["created_at"].timestamp() > week),
+            "google": sum(1 for u in users if u["google_sub"]),
+        }
 
     # test helpers --------------------------------------------------------
 

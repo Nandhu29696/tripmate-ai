@@ -82,3 +82,10 @@ erDiagram
 - `auth_tokens` holds only a SHA-256 of each emailed token (purposes `verify`, `reset`); consumption is a single atomic `UPDATE ... WHERE used_at IS NULL AND expires_at > now() RETURNING user_id`, so a link works once.
 - `sessions_valid_after` is written from the **application** clock (not `now()`), because session tokens carry the application's issue time; a password reset raises it, which signs out all older sessions.
 - `tripmate_threads.owner_id` is now the user id, so trips follow the person across devices. Account deletion removes the user's trips and checkpoints, their tokens, and the user row.
+
+## v2.2 tables
+
+- `users.role TEXT NOT NULL DEFAULT 'user'` (added with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
+- `api_request_logs(id, ts, request_id, method, path, status, duration_ms, user_id, ip)`, index on `ts`; written in batches by a background thread; purged after `LOG_RETENTION_DAYS`.
+- `admin_audit_log(id, ts, actor_id, actor_email, action, target, detail, ip)`.
+- SQL statement log: not a table. A psycopg cursor subclass (`observability.make_cursor_class`, set as the pool's `cursor_factory`) times each statement; only text and timing are kept, in a 2000-entry in-memory ring. Statements touching the two log tables are not recorded.

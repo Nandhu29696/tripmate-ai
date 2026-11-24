@@ -108,8 +108,90 @@ UNTRUSTED_NOTE = (
 def _style(max_words: int) -> str:
     return (
         f" Hard limit: at most {max_words} words. Use short markdown headings and "
-        "bullet points; do NOT use tables. Always finish every section."
+        "bullet points (or the layout you are given); do NOT use tables. Always finish every section."
     )
+
+
+# One layout for the draft and the final plan. The web app parses it into day cards,
+# so the headings and the "**Label:**" lines must be followed exactly.
+DAY_FORMAT = """
+Day-by-day section. Write one block per day, in this exact layout:
+
+## Day 1 - <short theme for the day>
+**Weather:** <one weather emoji> <temperature range>, <conditions>. <one practical tip>
+- **Morning:** <what to do, with the place name>
+- **Afternoon:** <what to do>
+- **Evening:** <dinner / night plan>
+- **Getting around:** <how to move between the places>
+- **Est. cost:** <approximate cost per person for the day, with currency>
+
+Rules for the day blocks:
+- Every day has all six lines above, in that order. Number days Day 1, Day 2, ...
+- Weather emoji: use one of ☀️ 🌤️ ☁️ 🌧️ ⛈️ ❄️ 🌫️. Use the weather data given; for days
+  beyond the forecast give seasonal guidance and say "typically".
+- Trips longer than 7 days: keep each line to one short sentence.
+- Never invent prices or hotel names; label estimates as approximate.
+"""
+
+ITINERARY_FORMAT = """
+Use EXACTLY this markdown structure and these headings, in this order:
+
+## Trip at a glance
+- **Destination:** <city, country>
+- **Dates:** <dates or duration>
+- **Travellers:** <who and how many>
+- **Budget:** <level and rough total>
+- **Getting there:** <one line on the flight options>
+- **Where to stay:** <one line, area or hotel type>
+
+## Weather outlook
+<2 sentences: expected temperatures, rain, and what to pack>
+""" + DAY_FORMAT + """
+## Budget summary
+- **Flights:** <estimate>
+- **Stay:** <estimate>
+- **Food and activities:** <estimate>
+- **Local transport:** <estimate>
+- **Total:** <estimate>
+
+## Before you go
+- <3 to 5 short bullets: documents or visa, money and SIM, bookings to make early, packing>
+
+Do NOT use markdown tables. Finish every section.
+"""
+
+FINAL_FORMAT = """
+Use EXACTLY this markdown structure and these headings, in this order:
+
+## Trip at a glance
+- **Destination:** <city, country>
+- **Dates:** <dates or duration>
+- **Travellers:** <who and how many>
+- **Budget:** <level and rough total>
+- **Getting there:** <one line>
+- **Where to stay:** <one line>
+
+## Flights
+<short bullets from the flight data; say plainly when ticket prices are unavailable>
+
+## Hotels
+<bullets from the hotel data; each with its source link as a markdown link; never invent names or links>
+
+## Weather outlook
+<2 sentences: expected temperatures, rain, and what to pack>
+""" + DAY_FORMAT + """
+## Budget summary
+- **Flights:** <estimate>
+- **Stay:** <estimate>
+- **Food and activities:** <estimate>
+- **Local transport:** <estimate>
+- **Total:** <estimate>
+
+## Before you go
+- <3 to 5 short bullets>
+
+Do NOT use markdown tables. Finish every section.
+"""
 
 
 _INJECTION_PATTERNS = re.compile(
@@ -686,10 +768,11 @@ Trip constraints: {truncate_context(state.get('trip_constraints', {}), 300)}
 {revision_block}
 Make the itinerary practical, budget-aware, and easy to follow.
 Create a clear draft that is ready for human review.
+{ITINERARY_FORMAT}
 """
 
     draft = _llm_text(
-        "You are an expert travel planner. " + UNTRUSTED_NOTE + _style(700),
+        "You are an expert travel planner. " + UNTRUSTED_NOTE + _style(950),
         prompt,
         max_output_tokens=config.LLM_OUTPUT_TOKENS_ITINERARY,
         flag_truncation=True,
@@ -787,28 +870,21 @@ Supervisor constraints: {truncate_context(state.get('trip_constraints', {}), 300
 {fence('budget', state.get('budget_results', ''), 600)}
 {fence('draft', state.get('itinerary', ''), 1500)}
 
-Format the final answer beautifully using these sections:
-1. Trip Summary
-2. Flight Information
-3. Hotel Suggestions
-4. Weather Information
-5. Day-by-Day Itinerary
-6. Estimated Budget
-7. Final Recommendations
+Format the final answer like this:
+{FINAL_FORMAT}
 
 Important:
 - Be clear and practical.
 - Mention that live flight APIs may not provide ticket prices when pricing is unavailable.
 - Include weather-based travel advice.
-- Hotel Suggestions: base them on the hotel data above and give the source link
-  for each one as a markdown link. Never invent hotel names or links; if the
-  data has no usable hotels, say live results were unavailable and give
-  neighbourhood advice instead.
+- Hotels: base them on the hotel data above and give the source link for each
+  one as a markdown link. Never invent hotel names or links; if the data has no
+  usable hotels, say live results were unavailable and give neighbourhood advice.
 - Keep the response useful for real travel planning.
 """
 
     text = _llm_text(
-        "You are a professional AI travel booking assistant. " + UNTRUSTED_NOTE + _style(1000),
+        "You are a professional AI travel booking assistant. " + UNTRUSTED_NOTE + _style(1250),
         final_prompt,
         max_output_tokens=config.LLM_OUTPUT_TOKENS_FINAL,
         flag_truncation=True,
@@ -908,6 +984,7 @@ def init_backend() -> None:
     from psycopg.rows import dict_row
     from psycopg_pool import ConnectionPool
 
+    import observability
     from store import PostgresThreadRegistry
 
     config.require_env("GROQ_API_KEY")
@@ -917,7 +994,12 @@ def init_backend() -> None:
         conninfo=url,
         min_size=1,
         max_size=int(os.getenv("DB_POOL_MAX", "10")),
-        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": 0,
+            "row_factory": dict_row,
+            "cursor_factory": observability.make_cursor_class(),  # times every SQL statement
+        },
         check=ConnectionPool.check_connection,
         open=False,
     )
@@ -933,6 +1015,10 @@ def init_backend() -> None:
 
     users = PostgresUserStore(pool)
     users.ensure_schema()
+
+    log_store = observability.PostgresLogStore(pool)
+    log_store.ensure_schema()
+    observability.use_store(log_store)
 
     _pool, _checkpointer, _registry, _users = pool, checkpointer, registry, users
     _travel_graph = build_graph().compile(checkpointer=checkpointer)
@@ -952,6 +1038,10 @@ def init_backend_for_tests(checkpointer, registry, users=None) -> None:
 def shutdown_backend() -> None:
     global _pool, _checkpointer, _registry, _users, _travel_graph
     mcp_client.shutdown()
+    import observability
+
+    observability.get_store().close()
+    observability.use_store(observability.MemoryLogStore())
     if _pool is not None:
         _pool.close()
     _pool = _checkpointer = _registry = _users = _travel_graph = None
@@ -1215,6 +1305,22 @@ def delete_trip(owner_id: str, thread_id: str) -> None:
         _thread_locks.pop(thread_id, None)
 
 
+def get_registry():
+    if _registry is None:
+        raise RuntimeError("Backend is not initialised. Call init_backend() first.")
+    return _registry
+
+
+def admin_delete_trip(thread_id: str) -> None:
+    """Remove any user's trip (admin only; the caller has already authorised this)."""
+    if _registry.get(thread_id) is None:
+        raise ThreadNotFoundError(thread_id)
+    _checkpointer.delete_thread(thread_id)
+    _registry.delete(thread_id)
+    with _thread_locks_guard:
+        _thread_locks.pop(thread_id, None)
+
+
 def get_user_store():
     if _users is None:
         raise RuntimeError("Backend is not initialised. Call init_backend() first.")
@@ -1241,8 +1347,11 @@ def purge_expired(days: int | None = None) -> int:
     """Delete trips not touched for ``days`` (default RETENTION_DAYS)."""
     days = config.RETENTION_DAYS if days is None else days
     if days <= 0:
-        return 0
+        return 0  # retention disabled
 
+    import observability
+
+    observability.get_store().purge(config.LOG_RETENTION_DAYS)
     purge_tokens = getattr(_users, "purge_expired_tokens", None)
     if purge_tokens:
         purge_tokens()

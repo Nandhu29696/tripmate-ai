@@ -231,3 +231,4 @@ frontend/.vite/
 
 # Office lock files (created while a document is open)
 ~$*
+frontend/tsconfig.tsbuildinfo

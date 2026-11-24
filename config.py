@@ -67,6 +67,16 @@ def configure_logging() -> None:
         )
     )
     root.handlers[:] = [handler]
+
+    # Optional rotating file (5 x 5 MB) with the same format, for servers without a log shipper.
+    log_file = os.getenv("LOG_FILE", "").strip()
+    if log_file:
+        from logging.handlers import RotatingFileHandler
+
+        file_handler = RotatingFileHandler(log_file, maxBytes=5_000_000, backupCount=5, encoding="utf-8")
+        file_handler.addFilter(_RequestIdFilter())
+        file_handler.setFormatter(handler.formatter)
+        root.addHandler(file_handler)
     root.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
     root._tripmate_configured = True  # type: ignore[attr-defined]
 
@@ -87,8 +97,8 @@ MCP_CALL_TIMEOUT_SECONDS = _int("MCP_CALL_TIMEOUT_SECONDS", 45)
 # Output budgets per stage (F-16). Live testing showed 1100/1400 truncated real
 # 4-day plans; raise them further for longer trips (mind your provider's TPM).
 LLM_OUTPUT_TOKENS = _int("LLM_OUTPUT_TOKENS", 1000)
-LLM_OUTPUT_TOKENS_ITINERARY = _int("LLM_OUTPUT_TOKENS_ITINERARY", 2000)
-LLM_OUTPUT_TOKENS_FINAL = _int("LLM_OUTPUT_TOKENS_FINAL", 2600)
+LLM_OUTPUT_TOKENS_ITINERARY = _int("LLM_OUTPUT_TOKENS_ITINERARY", 3000)
+LLM_OUTPUT_TOKENS_FINAL = _int("LLM_OUTPUT_TOKENS_FINAL", 3600)
 LLM_MAX_INPUT_TOKENS = _int("LLM_MAX_INPUT_TOKENS", 5200)
 
 # Reasoning models (e.g. gpt-oss) spend hidden "reasoning" tokens that count
@@ -141,6 +151,16 @@ SMTP_STARTTLS = _bool("SMTP_STARTTLS", True)
 
 # Data retention (F-11)
 RETENTION_DAYS = _int("RETENTION_DAYS", 30)
+
+# Admin console and operational logs
+# Comma-separated emails that become administrators once their address is verified
+# (email link or Google). Everyone else stays a normal user.
+ADMIN_EMAILS = frozenset(
+    e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()
+)
+LOG_SQL = _bool("LOG_SQL", True)  # keep a ring of recent SQL statements (text and timing only)
+SLOW_QUERY_MS = _int("SLOW_QUERY_MS", 200)
+LOG_RETENTION_DAYS = _int("LOG_RETENTION_DAYS", 14)  # API request log rows
 
 # Built React app served by FastAPI (npm run build in frontend/). Override for tests/containers.
 FRONTEND_DIST = Path(os.getenv("FRONTEND_DIST") or BASE_DIR / "frontend" / "dist")

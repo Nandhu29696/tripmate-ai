@@ -170,3 +170,20 @@ Replaced the vanilla-JS page with a React 19 + TypeScript + Vite single-page app
 - Without a build, the API serves a clear placeholder page (HTTP 503) instead of failing.
 - On Windows, a project path containing `&` breaks npm's `cmd.exe` scripts; Docker and CI are unaffected.
 - Not verified: behaviour on real mobile hardware and in Safari/Firefox (Chromium only), and screen-reader testing (semantics were checked by test, not by assistive technology).
+
+## Round: v2.2 (day-wise plans, admin console, logs, UI)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Day-wise draft with weather | Done | prompts share `DAY_FORMAT`; live run with the real model produced 3 day cards, 3 weather chips, glance tiles, weather outlook, cost footers; final plan adds Flights and Hotels |
+| Admin role and console | Done | `ADMIN_EMAILS` promotion (verified only), DB-checked role, self-protection, audit trail; 42 backend tests in `tests/test_admin.py` |
+| API request and SQL logs | Done | persisted request log, SQL ring with timings, no parameter values; live check: SQL rows present, no email/hash text, logger's own writes absent |
+| Streamed request timing bug | Found and fixed | streamed calls were logged as ~3 ms; now timed to the last chunk (14 s in the live run); regression test added |
+| Larger answer budgets | Changed | itinerary 3000 and final 3600 tokens to fit day-wise layout |
+| UI refresh | Done | gradient, stat cards, hourly chart (24 slots), timeline; phone width 390 px without sideways scroll |
+| Manual, roadmap, tracker | Updated | manual v2.2, 12_ROADMAP future list (16 items), tracker rows DONE-007..012 and FUT-001..016 |
+
+Totals: 188 backend tests, 101 frontend tests, ruff clean, strict TypeScript clean. Live browser run on real PostgreSQL + Groq: 29 of 30 checks passed; the 30th was a timing race in my script (it matched the previous tab's row) and the page was confirmed correct by a direct probe.
+
+Observed, not fixed: the AI provider returned HTTP 429 after several plans within a minute (the app showed its friendly error); see FUT-003.
+Not verified: Google consent screen, real SMTP, Safari/Firefox, real phones, screen readers, GitHub Actions (account billing lock).

@@ -1,6 +1,19 @@
 import { api } from "./client";
 import { streamRequest } from "./stream";
-import type { ApprovalInput, ProgressEvent, SessionResponse, TripPayload, TripSummary } from "./types";
+import type {
+  AdminOverview,
+  AdminTrip,
+  AdminUser,
+  ApprovalInput,
+  AuditLog,
+  ProgressEvent,
+  RequestLog,
+  SessionResponse,
+  SqlLog,
+  SystemInfo,
+  TripPayload,
+  TripSummary,
+} from "./types";
 
 export const getSession = () => api<SessionResponse>("/api/session");
 
@@ -33,3 +46,47 @@ export const startTrip = (message: string, onProgress: (e: ProgressEvent) => voi
 
 export const reviewTrip = (input: ApprovalInput, onProgress: (e: ProgressEvent) => void, signal?: AbortSignal) =>
   streamRequest("/api/travel/approve/stream", input, onProgress, signal);
+
+/* ---------- Admin console ---------- */
+function query(params: Record<string, string | number | boolean | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "" && value !== false) search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}
+
+export const adminOverview = () => api<AdminOverview & { success: boolean }>("/api/admin/overview");
+
+export const adminUsers = (params: { q?: string; limit?: number; offset?: number }) =>
+  api<{ total: number; users: AdminUser[] }>(`/api/admin/users${query(params)}`);
+
+export const adminUpdateUser = (id: string, change: { role?: "user" | "admin"; is_active?: boolean; verify_email?: boolean }) =>
+  api<{ user: AdminUser }>(`/api/admin/users/${id}`, { method: "PATCH", json: change });
+
+export const adminRevokeSessions = (id: string) =>
+  api<{ success: boolean }>(`/api/admin/users/${id}/revoke-sessions`, { method: "POST" });
+
+export const adminDeleteUser = (id: string) =>
+  api<{ trips_deleted: number }>(`/api/admin/users/${id}`, { method: "DELETE" });
+
+export const adminTrips = (params: { status?: string; owner?: string; limit?: number; offset?: number }) =>
+  api<{ total: number; trips: AdminTrip[] }>(`/api/admin/trips${query(params)}`);
+
+export const adminDeleteTrip = (id: string) => api<{ success: boolean }>(`/api/admin/trips/${id}`, { method: "DELETE" });
+
+export const adminRequestLogs = (params: { status?: string; method?: string; path?: string; min_ms?: number; limit?: number; offset?: number }) =>
+  api<{ logs: RequestLog[] }>(`/api/admin/logs/requests${query(params)}`);
+
+export const adminSqlLogs = (params: { q?: string; slow?: boolean; errors?: boolean; limit?: number }) =>
+  api<{ enabled: boolean; slow_threshold_ms: number; summary: AdminOverview["sql"]; logs: SqlLog[] }>(
+    `/api/admin/logs/sql${query(params)}`,
+  );
+
+export const adminAuditLogs = (params: { limit?: number; offset?: number } = {}) =>
+  api<{ logs: AuditLog[] }>(`/api/admin/logs/audit${query(params)}`);
+
+export const adminSystem = () => api<SystemInfo>("/api/admin/system");
+
+export const adminPurge = () => api<{ trips_removed: number }>("/api/admin/system/purge", { method: "POST" });

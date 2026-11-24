@@ -19,6 +19,9 @@ class ThreadRegistry(Protocol):
     def list_for_owner(self, owner_id: str, limit: int = 20) -> list[dict[str, Any]]: ...
     def delete(self, thread_id: str) -> None: ...
     def expired(self, days: int) -> list[str]: ...
+    def list_all(self, status: str = "", owner_id: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]: ...
+    def get(self, thread_id: str) -> dict[str, Any] | None: ...
+    def counts(self) -> dict[str, Any]: ...
 
 
 # One statement per entry: the pool uses prepare_threshold=0 (extended
@@ -101,6 +104,47 @@ class PostgresThreadRegistry:
             ).fetchall()
         return [row["thread_id"] for row in rows]
 
+    def list_all(self, status="", owner_id="", limit=50, offset=0):
+        where, params = ["TRUE"], []
+        if status:
+            where.append("status = %s")
+            params.append(status)
+        if owner_id:
+            where.append("owner_id = %s")
+            params.append(owner_id)
+        clause = " AND ".join(where)
+        with self._pool.connection() as conn:
+            total = conn.execute(f"SELECT count(*) AS n FROM tripmate_threads WHERE {clause}", tuple(params)).fetchone()["n"]
+            rows = conn.execute(
+                "SELECT thread_id, owner_id, title, status, created_at, updated_at FROM tripmate_threads "
+                f"WHERE {clause} ORDER BY updated_at DESC LIMIT %s OFFSET %s",
+                (*params, limit, offset),
+            ).fetchall()
+        return [{**r, "created_at": _iso(r["created_at"]), "updated_at": _iso(r["updated_at"])} for r in rows], total
+
+    def get(self, thread_id):
+        with self._pool.connection() as conn:
+            row = conn.execute(
+                "SELECT thread_id, owner_id, title, status, created_at, updated_at FROM tripmate_threads "
+                "WHERE thread_id = %s", (thread_id,)
+            ).fetchone()
+        return {**row, "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"])} if row else None
+
+    def counts(self):
+        with self._pool.connection() as conn:
+            by_status = conn.execute("SELECT status, count(*) AS n FROM tripmate_threads GROUP BY status").fetchall()
+            recent = conn.execute(
+                "SELECT count(*) AS n FROM tripmate_threads WHERE created_at > now() - interval '24 hours'"
+            ).fetchone()["n"]
+            per_owner = conn.execute(
+                "SELECT owner_id, count(*) AS n FROM tripmate_threads GROUP BY owner_id"
+            ).fetchall()
+        return {
+            "by_status": {r["status"]: int(r["n"]) for r in by_status},
+            "last_24h": int(recent),
+            "per_owner": {r["owner_id"]: int(r["n"]) for r in per_owner},
+        }
+
 
 class InMemoryThreadRegistry:
     """Test double with the same behaviour as the Postgres registry."""
@@ -142,3 +186,28 @@ class InMemoryThreadRegistry:
     def expired(self, days: int) -> list[str]:
         cutoff = datetime.now(UTC) - timedelta(days=days)
         return [tid for tid, r in self._rows.items() if r["updated_at"] < cutoff]
+
+    def list_all(self, status="", owner_id="", limit=50, offset=0):
+        rows = [r for r in self._rows.values()
+                if (not status or r["status"] == status) and (not owner_id or r["owner_id"] == owner_id)]
+        rows.sort(key=lambda r: r["updated_at"], reverse=True)
+        out = [self.get(r["thread_id"]) for r in rows[offset: offset + limit]]
+        return out, len(rows)
+
+    def get(self, thread_id):
+        r = self._rows.get(thread_id)
+        if not r:
+            return None
+        return {"thread_id": r["thread_id"], "owner_id": r["owner_id"], "title": r["title"], "status": r["status"],
+                "created_at": _iso(r["created_at"]), "updated_at": _iso(r["updated_at"])}
+
+    def counts(self):
+        by_status: dict[str, int] = {}
+        per_owner: dict[str, int] = {}
+        recent = 0
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
+        for r in self._rows.values():
+            by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+            per_owner[r["owner_id"]] = per_owner.get(r["owner_id"], 0) + 1
+            recent += 1 if r["created_at"] > cutoff else 0
+        return {"by_status": by_status, "last_24h": recent, "per_owner": per_owner}

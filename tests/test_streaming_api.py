@@ -2,6 +2,7 @@
 
 import json
 import time
+import uuid
 
 import groq
 import httpx
@@ -9,16 +10,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
+import backend
 import security
 from app import app
+from tests.conftest import signed_in_client
 
 PROMPT = "Plan a 7-day Japan trip from Dhaka in October."
 
 
 def new_client() -> TestClient:
-    client = TestClient(app)
-    assert client.get("/api/session").json()["authenticated"] is True
-    return client
+    """A client signed in as a fresh verified user."""
+    return signed_in_client(backend.get_user_store(), email=f"{uuid.uuid4().hex[:10]}@example.com")
 
 
 @pytest.fixture

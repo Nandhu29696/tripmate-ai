@@ -26,15 +26,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
+import auth_routes
 import backend
 import config
 import security
+import web_common as web
+from web_common import current_session
 
 config.configure_logging()
 logger = logging.getLogger("tripmate.api")
 
 BASE_DIR = Path(__file__).resolve().parent
-SESSION_COOKIE = "tm_session"
 THREAD_ID_PATTERN = r"^trip_[0-9a-f]{32}$"
 PURGE_INTERVAL_SECONDS = 6 * 3600
 
@@ -80,6 +82,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(auth_routes.router)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
@@ -105,58 +108,15 @@ class ApprovalRequest(BaseModel):
     feedback: str = Field(default="", max_length=config.MAX_FEEDBACK_CHARS)
 
 
-class LoginRequest(BaseModel):
-    access_key: str = Field(default="", max_length=200)
-
-
 # =========================
 # Helpers
 # =========================
-def _error(status: int, message: str, headers: dict[str, str] | None = None, **extra):
-    from config import request_id_var
-
-    return JSONResponse(
-        status_code=status,
-        content={"success": False, "error": message, "request_id": request_id_var.get(), **extra},
-        headers=headers,
-    )
+_error = web.error_response
 
 
-def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
-
-
-def _set_session_cookie(response: Response, request: Request, sid: str) -> None:
-    response.set_cookie(
-        SESSION_COOKIE,
-        security.issue_session_token(sid),
-        max_age=config.SESSION_TTL_SECONDS,
-        httponly=True,
-        samesite="strict",
-        secure=request.url.scheme == "https",
-        path="/",
-    )
-
-
-def current_session(request: Request) -> str:
-    """Dependency: the caller's verified session id, or 401."""
-    sid = security.verify_session_token(request.cookies.get(SESSION_COOKIE))
-    if not sid:
-        raise _AuthError()
-    return sid
-
-
-class _AuthError(Exception):
-    pass
-
-
-@app.exception_handler(_AuthError)
-async def _auth_error_handler(request: Request, exc: _AuthError):
-    return _error(
-        401,
-        "Please sign in to continue." if security.auth_required() else "Session expired. Please reload the page.",
-        auth_required=security.auth_required(),
-    )
+@app.exception_handler(web.AuthError)
+async def _auth_error_handler(request: Request, exc: web.AuthError):
+    return _error(401, "Please sign in to continue.", auth_required=True)
 
 
 @app.exception_handler(RequestValidationError)
@@ -251,51 +211,6 @@ async def request_context(request: Request, call_next):
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(request=request, name="index.html", context={})
-
-
-@app.get("/api/session")
-def session_status(request: Request, response: Response):
-    """Bootstrap: report auth state; in open mode, issue an anonymous session."""
-    sid = security.verify_session_token(request.cookies.get(SESSION_COOKIE))
-
-    if not sid and not security.auth_required():
-        sid = security.new_session_id()
-        _set_session_cookie(response, request, sid)
-
-    return {
-        "success": True,
-        "authenticated": bool(sid),
-        "auth_required": security.auth_required(),
-    }
-
-
-@app.post("/api/session")
-def login(body: LoginRequest, request: Request):
-    if not security.auth_required():
-        response = JSONResponse({"success": True, "authenticated": True})
-        _set_session_cookie(response, request, security.new_session_id())
-        return response
-
-    ip = _client_ip(request)
-    wait = security.login_failures.retry_after(ip)
-    if wait:
-        return _error(429, "Too many attempts. Please wait and try again.", headers={"Retry-After": str(wait)})
-
-    if not security.access_key_matches(body.access_key):
-        security.login_failures.record(ip)
-        logger.warning("Failed login from %s", ip)
-        return _error(401, "That access key is not valid.", auth_required=True)
-
-    response = JSONResponse({"success": True, "authenticated": True})
-    _set_session_cookie(response, request, security.new_session_id())
-    return response
-
-
-@app.delete("/api/session")
-def logout():
-    response = JSONResponse({"success": True})
-    response.delete_cookie(SESSION_COOKIE, path="/")
-    return response
 
 
 # =========================

@@ -7,7 +7,7 @@ Key ideas:
 - Supervisor + guardrail in one structured LLM call, fail-closed on unparseable output
 - Human-in-the-loop approval with a revision loop and restorable drafts
 - Live progress while a plan is built (streamed), and source-linked hotel suggestions
-- Access key, signed sessions, per-owner trips, quotas, retention and delete
+- User accounts (email + password, and Google sign-in), per-user trips and quotas, retention and delete
 
 ## Contents
 - `app.py`: FastAPI app, routes, security headers, lifespan
@@ -16,7 +16,12 @@ Key ideas:
 - `custom_weather_mcp_server.py`: OpenWeather MCP server (current weather + daily forecast)
 - `config.py`: settings, logging, shared LLM client
 - `llm_utils.py`: token budgeting, prompt fencing, per-node LLM call counting
-- `security.py`: session tokens, access key, quotas, login throttling
+- `security.py`: signed session/OAuth-state tokens, quotas, throttling
+- `accounts.py`: password hashing (scrypt), user store, one-time email tokens
+- `auth_routes.py`: register, confirm email, sign in, forgot/reset password, Google, delete account
+- `oauth_google.py`: Google OAuth 2.0 / OpenID Connect (PKCE, state, nonce)
+- `mailer.py`: SMTP email (logs the message when SMTP is not configured)
+- `web_common.py`: shared helpers (session cookie, current user, error responses)
 - `store.py`: thread ownership registry (`tripmate_threads` table)
 - `templates/`, `static/`: UI (libraries are self-hosted in `static/vendor/`)
 - `tests/`: pytest suite (no network or database needed)
@@ -56,14 +61,14 @@ python -m pip install -r requirements-dev.txt
 python app.py
 ```
 
-Open http://127.0.0.1:8000. With `APP_ACCESS_KEY` empty (the default for local use) the app is open and each browser gets an anonymous session; set `APP_ACCESS_KEY` to require a key. Tables are created automatically at startup.
+Open http://127.0.0.1:8000 and create an account. Without `SMTP_HOST` the confirmation and reset links are written to the app log (look for `DEV MAIL`), so copy the link from the terminal. Tables are created automatically at startup.
 
 Flight data uses the version-pinned `aviationstack-mcp` server, started through `uvx` (installed by the `uv` dependency; the first run downloads Python 3.13 for it). In Docker it is pre-installed in the image.
 
 ## Tests and lint
 
 ```powershell
-python -m pytest -q      # 73 tests, no network or database
+python -m pytest -q      # 124 tests, no network or database
 ruff check .
 ```
 
@@ -71,12 +76,19 @@ CI (`.github/workflows/ci.yml`) runs lint, a script syntax check, the tests and 
 
 ## API
 
-All `/api/travel*` endpoints need a session cookie from `/api/session` and only ever touch the caller's own trips (other trips return 404).
+All `/api/travel*` endpoints need a signed-in user and only ever touch that user's own trips (other trips return 404).
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| GET | `/api/session` | Auth status; in open mode issues an anonymous session |
-| POST | `/api/session` | Sign in `{access_key}` (throttled) |
+| GET | `/api/session` | Who is signed in, and which sign-in methods are available |
+| POST | `/api/auth/register` | `{email, password, name?}`; sends a confirmation link; same reply whether or not the email exists |
+| GET | `/auth/verify?token=` | Confirms the email, signs in, redirects to `/?verified=1` |
+| POST | `/api/auth/login` | `{email, password}`; generic error; throttled per IP and per account |
+| POST | `/api/auth/forgot` | `{email}`; always the same reply; emails a one-hour reset link if the account exists |
+| POST | `/api/auth/reset` | `{token, password}`; signs out every other session |
+| GET | `/auth/google/login` | Starts Google sign-in (PKCE + state + nonce) |
+| GET | `/auth/google/callback` | Google redirects here; creates or links the account |
+| POST | `/api/account/delete` | `{confirm: true}`; deletes the user, every trip and its checkpoints |
 | DELETE | `/api/session` | Sign out |
 | POST | `/api/travel` | New trip `{message}`; pauses for review (`requires_approval`) |
 | POST | `/api/travel/stream` | Same, but streams live progress as NDJSON: `{type:"progress",node,label,state}` lines, then one `{type:"result",...}` or `{type:"error",status,error}` |
@@ -92,9 +104,30 @@ Errors are `{success:false, error, request_id}`; 401 not signed in, 404 not foun
 
 ## Configuration
 
-Required: `GROQ_API_KEY`, `DATABASE_URL`. Production also needs `SESSION_SECRET` (and should set `APP_ACCESS_KEY`). Optional tuning (defaults): `MAX_PLANS_PER_SESSION_PER_HOUR=5`, `MAX_PLANS_PER_DAY=300`, `RETENTION_DAYS=30`, `MAX_REVISIONS=2`, `GUARDRAIL_FAIL_OPEN=false`, `LLM_TIMEOUT_SECONDS=60`, `LLM_MAX_RETRIES=2`, `LLM_OUTPUT_TOKENS=1000`, `LLM_OUTPUT_TOKENS_ITINERARY=2000`, `LLM_OUTPUT_TOKENS_FINAL=2600`, `LLM_MAX_INPUT_TOKENS=5200`, `MAX_MESSAGE_CHARS=4000`, `DB_POOL_MAX=10`. See `.env.example` and `.env.production.example`.
+Required: `GROQ_API_KEY`, `DATABASE_URL`. Production also needs `SESSION_SECRET` and `PUBLIC_BASE_URL` (the site's https URL; `deploy.sh` refuses to run without them), plus `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` for Google sign-in and `SMTP_*` for email. Optional tuning (defaults): `MAX_PLANS_PER_USER_PER_HOUR=5`, `MAX_PLANS_PER_DAY=300`, `MIN_PASSWORD_LENGTH=10`, `REGISTER_PER_IP_PER_HOUR=5`, `FORGOT_PER_EMAIL_PER_HOUR=3`, `SESSION_TTL_SECONDS=43200`, `RETENTION_DAYS=30`, `MAX_REVISIONS=2`, `GUARDRAIL_FAIL_OPEN=false`, `LLM_TIMEOUT_SECONDS=60`, `LLM_MAX_RETRIES=2`, `LLM_OUTPUT_TOKENS=1000`, `LLM_OUTPUT_TOKENS_ITINERARY=2000`, `LLM_OUTPUT_TOKENS_FINAL=2600`, `LLM_MAX_INPUT_TOKENS=5200`, `MAX_MESSAGE_CHARS=4000`, `DB_POOL_MAX=10`. See `.env.example` and `.env.production.example`.
 
 Quotas are counted in process memory (single worker). Run one worker, or move the counters to a shared store before scaling out.
+
+## Accounts and Google sign-in
+
+Everyone signs in before using the model, so every plan is tied to a person and counted against their own quota. Two methods share one `users` table:
+
+- **Email + password.** Registration sends a one-time confirmation link (24 h); sign-in is refused until it is used. Passwords are hashed with scrypt, must be 10+ characters, and failed sign-ins are throttled per IP and per account. "Forgot password" emails a one-hour single-use link and signs out every other session. Responses never reveal whether an email is registered.
+- **Google.** OAuth 2.0 / OpenID Connect with PKCE, `state` and `nonce`; the ID token's signature, issuer, audience and expiry are checked by `google-auth`, and `email_verified` must be true. A Google sign-in whose email matches an existing confirmed account links to it; if the existing account was never confirmed, its password is removed first, so someone who pre-registered a victim's address cannot keep access.
+
+Trips, quotas and history belong to the user, so they follow the person across devices. "Delete account" removes the user, all trips and their checkpoints.
+
+### One-time Google setup (about 15 minutes)
+
+1. Create a project at https://console.cloud.google.com.
+2. **APIs & Services -> OAuth consent screen:** user type **External**; app name, support email, developer contact; add your domain (for example `tripmate-ai.jagoindia.in`) as an authorized domain; add privacy-policy and terms URLs; scopes `openid`, `email`, `profile` only (non-sensitive, no Google verification review). While the app is in **Testing**, only listed test users can sign in; switch to **In production** for everyone.
+3. **Credentials -> Create OAuth client ID -> Web application**, with these authorized redirect URIs (exact match, including scheme and path):
+   - `http://127.0.0.1:8000/auth/google/callback` (local)
+   - `https://tripmate-ai.jagoindia.in/auth/google/callback` (production)
+4. Put the values in `.env` / `.env.production` (never in git): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and in production `PUBLIC_BASE_URL=https://tripmate-ai.jagoindia.in`.
+5. Email: set `SMTP_HOST`, `SMTP_PORT` (587 STARTTLS or 465 TLS), `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` with any transactional provider. Without `SMTP_HOST` the links are only written to the log, which is fine for development and unusable in production.
+
+If the Google variables are empty the "Continue with Google" button is hidden and email sign-in still works.
 
 ## Production deployment
 

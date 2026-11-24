@@ -1,7 +1,8 @@
-"""Session tokens, access-key check, quotas and login throttling (F-01, F-02).
+"""Signed tokens, quotas and throttling (F-01, F-02).
 
-Sessions are stateless HMAC-signed tokens stored in an HttpOnly cookie. The
-session id (``sid``) is the owner identity used for thread ownership.
+Sessions and the short-lived OAuth state cookie are stateless HMAC-signed
+tokens. A session token names a user id and carries its issue time, so the
+server can revoke older sessions (password reset) and deactivated users.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import secrets
 import threading
 import time
 from collections import defaultdict, deque
+from typing import Any
 
 import config
 
@@ -31,22 +33,17 @@ def _sign(payload: str) -> str:
     return _b64(hmac.new(key, payload.encode(), hashlib.sha256).digest())
 
 
-def new_session_id() -> str:
-    return secrets.token_urlsafe(18)
-
-
-def issue_session_token(sid: str | None = None, ttl: int | None = None) -> str:
-    payload = _b64(
-        json.dumps(
-            {"sid": sid or new_session_id(), "exp": int(time.time()) + (ttl or config.SESSION_TTL_SECONDS)},
-            separators=(",", ":"),
-        ).encode()
-    )
+# ---------------------------------------------------------------------------
+# Generic signed tokens
+# ---------------------------------------------------------------------------
+def issue_signed(data: dict[str, Any], ttl: int) -> str:
+    body = {**data, "exp": int(time.time()) + ttl}
+    payload = _b64(json.dumps(body, separators=(",", ":")).encode())
     return f"{payload}.{_sign(payload)}"
 
 
-def verify_session_token(token: str | None) -> str | None:
-    """Return the session id for a valid, unexpired token, else None."""
+def read_signed(token: str | None) -> dict[str, Any] | None:
+    """Return the payload of a valid, unexpired token, else None."""
     if not token or "." not in token:
         return None
 
@@ -61,25 +58,36 @@ def verify_session_token(token: str | None) -> str | None:
 
     if not isinstance(data, dict) or data.get("exp", 0) < time.time():
         return None
-
-    sid = data.get("sid")
-    return sid if isinstance(sid, str) and sid else None
+    return data
 
 
-def auth_required() -> bool:
-    return bool(config.APP_ACCESS_KEY)
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+def new_session_id() -> str:
+    return secrets.token_urlsafe(18)
 
 
-def access_key_matches(candidate: str) -> bool:
-    expected = config.APP_ACCESS_KEY
-    if not expected:
-        return False
-    return hmac.compare_digest(
-        hashlib.sha256(candidate.encode()).digest(),
-        hashlib.sha256(expected.encode()).digest(),
-    )
+def issue_session_token(user_id: str, ttl: int | None = None) -> str:
+    return issue_signed({"sid": user_id, "iat": time.time()}, ttl or config.SESSION_TTL_SECONDS)
 
 
+def read_session_token(token: str | None) -> dict[str, Any] | None:
+    data = read_signed(token)
+    if not data or not isinstance(data.get("sid"), str) or not data["sid"]:
+        return None
+    return data
+
+
+def verify_session_token(token: str | None) -> str | None:
+    """Return the user id for a valid token (signature and expiry only)."""
+    data = read_session_token(token)
+    return data["sid"] if data else None
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
 class SlidingWindowLimiter:
     """Thread-safe in-memory sliding-window counter.
 
@@ -126,22 +134,27 @@ class SlidingWindowLimiter:
             return 0
 
 
-plan_limiter = SlidingWindowLimiter(config.MAX_PLANS_PER_SESSION_PER_HOUR, 3600)
+plan_limiter = SlidingWindowLimiter(config.MAX_PLANS_PER_USER_PER_HOUR, 3600)
 daily_limiter = SlidingWindowLimiter(config.MAX_PLANS_PER_DAY, 86400)
-login_failures = SlidingWindowLimiter(5, 900)
+# Failed password attempts, counted separately per IP and per account email.
+login_failures_ip = SlidingWindowLimiter(10, 900)
+login_failures_email = SlidingWindowLimiter(5, 900)
+register_limiter = SlidingWindowLimiter(config.REGISTER_PER_IP_PER_HOUR, 3600)
+forgot_limiter = SlidingWindowLimiter(config.FORGOT_PER_EMAIL_PER_HOUR, 3600)
+forgot_ip_limiter = SlidingWindowLimiter(10, 3600)
+resend_limiter = SlidingWindowLimiter(3, 3600)
 
 
-def acquire_plan_quota(sid: str) -> int:
-    """Charge one plan to the session and the global daily cap.
+def acquire_plan_quota(user_id: str) -> int:
+    """Charge one plan to the user and the global daily cap.
 
     Returns 0 when allowed, otherwise the number of seconds to wait.
     """
-    wait = plan_limiter.try_acquire(sid)
+    wait = plan_limiter.try_acquire(user_id)
     if wait:
         return wait
 
     wait = daily_limiter.try_acquire("global")
     if wait:
-        # Refund is not tracked; the session slot simply expires with its window.
         return wait
     return 0

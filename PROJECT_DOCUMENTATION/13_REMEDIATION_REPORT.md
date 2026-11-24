@@ -110,3 +110,35 @@ Bugs found only by running the real stack (both fixed):
 Verification: 73 automated tests; a live run through Nginx showed events spread over 10.7 s; a real browser run against the full stack (UI to Nginx to app to Groq, MCP and Postgres) passed 22/22 checks, including 8 distinct progress snapshots, parallel stages, revision label, source links in the final plan, PDF export, reload restore and delete from the UI.
 
 Residual: the model still sometimes formats the hotel section as a table despite the style rule (harmless now that output is no longer truncated); one hotel in the sampled plan had no source and was labelled as a general recommendation, as instructed.
+
+
+## Follow-up round: user accounts, email/password and Google sign-in
+
+Replaces the shared access key and anonymous sessions. Design and setup steps are in the project README ("Accounts and Google sign-in").
+
+**What was built:** email + password registration with emailed confirmation, sign-in, forgot and reset; Google OAuth 2.0 / OpenID Connect (PKCE, state, nonce, ID-token verification with `google-auth`, `email_verified` required); per-user trips and quotas; session revocation on password reset; account deletion; SMTP mailer; throttles per IP and per account; Nginx limits for the password endpoints and `/auth/`; `PUBLIC_BASE_URL` required in production so links and the redirect URI never come from a forged Host header.
+
+**Security decisions worth knowing:**
+- Registration and forgot-password answer identically whether or not the email exists, and do the same work (the password is always hashed).
+- Pre-hijack defence: if someone registered a victim's email with their own password and the victim later signs in with Google, the unconfirmed account's password is removed before linking.
+- A Google email already linked to a different Google identity is never merged.
+- Reset tokens and confirmation tokens are hashed at rest, single-use, expiring, and purpose-bound.
+- Rejected (invalid) sign-up input is not counted against the sign-up throttle; only valid attempts, which cost an email and a database write, are.
+
+**Verification**
+
+| Check | Result |
+|---|---|
+| Automated tests | 124 pass (about 50 new: hashing, policy, tokens, enumeration, throttles, revocation, every Google failure mode, deletion, SMTP) |
+| Real PostgreSQL | New tables created; no orphan trips, checkpoints or tokens after account deletion |
+| Real browser, full stack, real LLM | 36 of 37 checks passed. The 37th was my test counting every user's trips; a direct query confirmed zero orphans. Covered: sign-up, weak password, unconfirmed sign-in, confirmation link, used link, real plan, sign-out/in, second device sees the same trip, forgot/reset, other device signed out by the reset, old password rejected, deletion, no CSP violations or console errors |
+| Real Nginx in front of the app | New locations work: auth zone allowed 5 then returned 429, `/auth/` reaches the app with the port preserved in the redirect URI, plan zone and light zone unchanged |
+| Google redirect | Verified to carry state, nonce, S256 challenge, client id and callback URI, and never the client secret |
+
+**Not verified:** the real Google consent screen and callback (no Google credentials were available; the exchange and ID-token verification are tested with Google mocked), delivery through a real SMTP server (tested with a fake SMTP client), and Google "In production" publishing.
+
+**Bugs found while verifying (fixed):** the planner section flashed for signed-out visitors before the session check completed (now hidden by default); a used or expired confirmation link was silently ignored for a signed-in user (now shows a notice); invalid sign-up attempts consumed the sign-up throttle.
+
+**Behaviour changes:** `APP_ACCESS_KEY`, `POST /api/session` and anonymous sessions are removed; `MAX_PLANS_PER_SESSION_PER_HOUR` is now `MAX_PLANS_PER_USER_PER_HOUR` (old name still read); the session cookie is `SameSite=Lax` (needed for the Google and email-link redirects; state-changing requests are POST/DELETE with an Origin check); `deploy.sh` now requires `PUBLIC_BASE_URL` and warns when Google or SMTP settings are empty.
+
+**Residual risks:** the session is a stateless token, so signing out clears the cookie but a stolen cookie stays valid until it expires (12 h) or the password is reset; sign-up throttles are per process; open sign-up means anyone can create an account, so the per-user and daily caps are the cost controls (a CAPTCHA such as Cloudflare Turnstile is the next step if abuse appears).

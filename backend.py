@@ -894,6 +894,7 @@ def build_graph() -> StateGraph:
 _pool = None
 _checkpointer = None
 _registry = None
+_users = None
 _travel_graph = None
 _thread_locks: dict[str, threading.Lock] = {}
 _thread_locks_guard = threading.Lock()
@@ -901,7 +902,7 @@ _thread_locks_guard = threading.Lock()
 
 def init_backend() -> None:
     """Open the DB pool, create tables, compile the graph. Call once at startup."""
-    global _pool, _checkpointer, _registry, _travel_graph
+    global _pool, _checkpointer, _registry, _users, _travel_graph
 
     from langgraph.checkpoint.postgres import PostgresSaver
     from psycopg.rows import dict_row
@@ -928,24 +929,32 @@ def init_backend() -> None:
     registry = PostgresThreadRegistry(pool)
     registry.ensure_schema()
 
-    _pool, _checkpointer, _registry = pool, checkpointer, registry
+    from accounts import PostgresUserStore
+
+    users = PostgresUserStore(pool)
+    users.ensure_schema()
+
+    _pool, _checkpointer, _registry, _users = pool, checkpointer, registry, users
     _travel_graph = build_graph().compile(checkpointer=checkpointer)
     logger.info("Backend ready (pool max_size=%s).", pool.max_size)
 
 
-def init_backend_for_tests(checkpointer, registry) -> None:
+def init_backend_for_tests(checkpointer, registry, users=None) -> None:
     """Wire the backend to in-memory components (no database)."""
-    global _checkpointer, _registry, _travel_graph
+    global _checkpointer, _registry, _users, _travel_graph
+    from accounts import InMemoryUserStore
+
     _checkpointer, _registry = checkpointer, registry
+    _users = users if users is not None else InMemoryUserStore()
     _travel_graph = build_graph().compile(checkpointer=checkpointer)
 
 
 def shutdown_backend() -> None:
-    global _pool, _checkpointer, _registry, _travel_graph
+    global _pool, _checkpointer, _registry, _users, _travel_graph
     mcp_client.shutdown()
     if _pool is not None:
         _pool.close()
-    _pool = _checkpointer = _registry = _travel_graph = None
+    _pool = _checkpointer = _registry = _users = _travel_graph = None
 
 
 def check_ready() -> dict[str, Any]:
@@ -1206,11 +1215,37 @@ def delete_trip(owner_id: str, thread_id: str) -> None:
         _thread_locks.pop(thread_id, None)
 
 
+def get_user_store():
+    if _users is None:
+        raise RuntimeError("Backend is not initialised. Call init_backend() first.")
+    return _users
+
+
+def delete_account(user_id: str) -> int:
+    """Delete every trip (and its checkpoints) and then the user. Returns trips removed."""
+    removed = 0
+    for trip in _registry.list_for_owner(user_id, limit=10_000):
+        try:
+            _checkpointer.delete_thread(trip["thread_id"])
+        finally:
+            _registry.delete(trip["thread_id"])
+        removed += 1
+        with _thread_locks_guard:
+            _thread_locks.pop(trip["thread_id"], None)
+    get_user_store().delete_user(user_id)
+    logger.info("Account deleted (%d trip(s) removed).", removed)
+    return removed
+
+
 def purge_expired(days: int | None = None) -> int:
     """Delete trips not touched for ``days`` (default RETENTION_DAYS)."""
     days = config.RETENTION_DAYS if days is None else days
     if days <= 0:
         return 0
+
+    purge_tokens = getattr(_users, "purge_expired_tokens", None)
+    if purge_tokens:
+        purge_tokens()
 
     removed = 0
     for thread_id in _registry.expired(days):

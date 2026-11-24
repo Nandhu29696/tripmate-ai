@@ -102,14 +102,6 @@ def test_limiter_blocks_then_reports_wait():
     assert limiter.try_acquire("other") == 0
 
 
-def test_access_key(monkeypatch):
-    monkeypatch.setattr(config, "APP_ACCESS_KEY", "s3cret")
-    assert security.auth_required()
-    assert security.access_key_matches("s3cret")
-    assert not security.access_key_matches("nope")
-    monkeypatch.setattr(config, "APP_ACCESS_KEY", "")
-    assert not security.auth_required()
-    assert not security.access_key_matches("")
 
 
 # ---- MCP hardening (F-04, F-05, F-06) ---------------------------------------

@@ -39,8 +39,20 @@ if [[ -z "$SESSION_SECRET_VALUE" || "$SESSION_SECRET_VALUE" == replace_with_* ]]
     exit 1
 fi
 
-if [[ -z "$(env_value APP_ACCESS_KEY)" ]]; then
-    echo "WARNING: APP_ACCESS_KEY is empty, so anyone can use the app (quota-limited)." >&2
+PUBLIC_URL_VALUE="$(env_value PUBLIC_BASE_URL)"
+if [[ ! "$PUBLIC_URL_VALUE" =~ ^https://[^/]+$ ]]; then
+    echo "Set PUBLIC_BASE_URL in .env.production to the site's https URL, e.g. https://tripmate-ai.jagoindia.in (no trailing slash)." >&2
+    echo "It is used for the Google redirect URI and for links in emails, so it must not come from request headers." >&2
+    exit 1
+fi
+
+if [[ -z "$(env_value GOOGLE_CLIENT_ID)" || -z "$(env_value GOOGLE_CLIENT_SECRET)" ]]; then
+    echo "WARNING: GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET are empty: 'Continue with Google' will be hidden." >&2
+fi
+
+if [[ -z "$(env_value SMTP_HOST)" ]]; then
+    echo "WARNING: SMTP_HOST is empty: confirmation and password-reset emails are only written to the log," >&2
+    echo "         so email/password sign-up cannot work for real users." >&2
 fi
 
 health_url="http://127.0.0.1:8014/ready"

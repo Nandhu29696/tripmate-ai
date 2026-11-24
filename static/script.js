@@ -118,39 +118,142 @@ function renderMarkdown(element, markdown) {
 }
 
 // ---------------------------------------------------------------------------
-// Auth
+// Accounts: email + password, Google, password reset
 // ---------------------------------------------------------------------------
-function showLogin() {
-  $("loginSection").classList.remove("hidden");
+let authMode = "signin";
+let providers = { google: false, password: true };
+let resetToken = null;
+
+const AUTH_ERRORS = {
+  google_failed: "Google sign-in did not work. Please try again.",
+  google_denied: "Google sign-in was cancelled.",
+  google_not_configured: "Google sign-in is not available right now.",
+  invalid_link: "That link is invalid or has expired. Please request a new one."
+};
+
+function setMessage(id, text, isError = false) {
+  const el = $(id);
+  el.textContent = text || "";
+  el.classList.toggle("is-error", Boolean(text) && isError);
+}
+
+function showNotice(text) {
+  const box = $("noticeBox");
+  box.textContent = text;
+  box.classList.toggle("hidden", !text);
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  const signup = mode === "signup";
+  $("tabSignin").setAttribute("aria-selected", String(!signup));
+  $("tabSignup").setAttribute("aria-selected", String(signup));
+  $("nameField").classList.toggle("hidden", !signup);
+  $("passwordHint").classList.toggle("hidden", !signup);
+  $("forgotLink").classList.toggle("hidden", signup);
+  $("authPassword").setAttribute("autocomplete", signup ? "new-password" : "current-password");
+  $("authSubmit").firstChild.textContent = signup ? "Create account " : "Sign in ";
+  $("authTitle").textContent = signup ? "Create your account" : "Sign in to plan your trip";
+  setMessage("authMessage", "");
+}
+
+function showAuthPanel(panel) {
+  $("authMain").classList.toggle("hidden", panel !== "main");
+  $("forgotForm").classList.toggle("hidden", panel !== "forgot");
+  $("resetForm").classList.toggle("hidden", panel !== "reset");
+  $("authTitle").textContent =
+    panel === "forgot" ? "Reset your password" :
+    panel === "reset" ? "Choose a new password" :
+    (authMode === "signup" ? "Create your account" : "Sign in to plan your trip");
+}
+
+function showLogin(message) {
+  $("authSection").classList.remove("hidden");
   $("plannerSection").classList.add("hidden");
   $("tripsSection").classList.add("hidden");
   $("logoutBtn").classList.add("hidden");
+  $("deleteAccountBtn").classList.add("hidden");
+  $("userName").textContent = "Your workspace";
+  $("googleBlock").classList.toggle("hidden", !providers.google);
+  if (message) setMessage("authMessage", message, true);
 }
 
-function showApp(authRequired) {
-  $("loginSection").classList.add("hidden");
+function showApp(user) {
+  $("authSection").classList.add("hidden");
   $("plannerSection").classList.remove("hidden");
-  $("logoutBtn").classList.toggle("hidden", !authRequired);
+  $("logoutBtn").classList.remove("hidden");
+  $("deleteAccountBtn").classList.remove("hidden");
+  $("userName").textContent = user && user.name ? user.name : "Your workspace";
 }
 
-async function login() {
-  const key = $("accessKey").value;
-  $("loginMessage").textContent = "";
+async function submitAuth() {
+  const email = $("authEmail").value.trim();
+  const password = $("authPassword").value;
 
-  if (!key.trim()) {
-    $("loginMessage").textContent = "Please enter your access key.";
+  if (!email || !password) {
+    setMessage("authMessage", "Please enter your email and password.", true);
     return;
   }
 
-  $("loginBtn").disabled = true;
+  $("authSubmit").disabled = true;
+  setMessage("authMessage", "");
   try {
-    await api("/api/session", { method: "POST", body: JSON.stringify({ access_key: key }) });
-    $("accessKey").value = "";
+    if (authMode === "signup") {
+      const data = await api("/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ email, password, name: $("authName").value.trim() })
+      });
+      $("authPassword").value = "";
+      setMessage("authMessage", data.message);
+    } else {
+      await api("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+      $("authPassword").value = "";
+      await bootstrap();
+    }
+  } catch (error) {
+    setMessage("authMessage", error.message, true);
+  } finally {
+    $("authSubmit").disabled = false;
+  }
+}
+
+async function submitForgot() {
+  const email = $("forgotEmail").value.trim();
+  if (!email) {
+    setMessage("forgotMessage", "Please enter your email.", true);
+    return;
+  }
+
+  $("forgotSubmit").disabled = true;
+  try {
+    const data = await api("/api/auth/forgot", { method: "POST", body: JSON.stringify({ email }) });
+    setMessage("forgotMessage", data.message);
+  } catch (error) {
+    setMessage("forgotMessage", error.message, true);
+  } finally {
+    $("forgotSubmit").disabled = false;
+  }
+}
+
+async function submitReset() {
+  const password = $("resetPassword").value;
+  if (!password) {
+    setMessage("resetMessage", "Please choose a new password.", true);
+    return;
+  }
+
+  $("resetSubmit").disabled = true;
+  try {
+    await api("/api/auth/reset", { method: "POST", body: JSON.stringify({ token: resetToken, password }) });
+    $("resetPassword").value = "";
+    resetToken = null;
+    showAuthPanel("main");
+    showNotice("Your password was changed. You are signed in.");
     await bootstrap();
   } catch (error) {
-    $("loginMessage").textContent = error.message;
+    setMessage("resetMessage", error.message, true);
   } finally {
-    $("loginBtn").disabled = false;
+    $("resetSubmit").disabled = false;
   }
 }
 
@@ -160,7 +263,38 @@ async function logout() {
   } catch (_) { /* ignore */ }
   rememberThread(null);
   resetTripView();
+  showNotice("");
+  showAuthPanel("main");
   showLogin();
+}
+
+async function deleteAccount() {
+  if (!window.confirm("Delete your account and every saved trip? This cannot be undone.")) return;
+
+  try {
+    await api("/api/account/delete", { method: "POST", body: JSON.stringify({ confirm: true }) });
+    rememberThread(null);
+    resetTripView();
+    showAuthPanel("main");
+    showLogin();
+    showNotice("Your account and all saved trips were deleted.");
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+// Links from emails and the Google redirect arrive as ?reset=, ?verified=1, ?auth_error=
+function readUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const result = {
+    reset: params.get("reset"),
+    verified: params.get("verified") === "1",
+    authError: params.get("auth_error")
+  };
+  if (window.location.search) {
+    window.history.replaceState(null, "", window.location.pathname);
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -609,8 +743,11 @@ document.addEventListener("click", (event) => {
     case "pdf": downloadPDF(); break;
     case "approve": submitApproval(true); break;
     case "revise": submitApproval(false); break;
-    case "login": login(); break;
+    case "auth-tab": setAuthMode(el.dataset.tab); break;
+    case "show-forgot": showAuthPanel("forgot"); break;
+    case "back-to-signin": showAuthPanel("main"); break;
     case "logout": logout(); break;
+    case "delete-account": deleteAccount(); break;
     case "open-trip": openTrip(el.dataset.threadId); break;
     case "delete-trip": deleteTrip(el.dataset.threadId); break;
   }
@@ -620,26 +757,47 @@ document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter" && document.activeElement === $("userInput")) {
     sendMessage();
   }
-  if (event.key === "Enter" && document.activeElement === $("accessKey")) {
-    login();
-  }
 });
 
 $("userInput").addEventListener("input", updatePromptCount);
 updatePromptCount();
 
+$("authForm").addEventListener("submit", (event) => { event.preventDefault(); submitAuth(); });
+$("forgotForm").addEventListener("submit", (event) => { event.preventDefault(); submitForgot(); });
+$("resetForm").addEventListener("submit", (event) => { event.preventDefault(); submitReset(); });
+
+let urlParams = readUrlParams();
+
 async function bootstrap() {
+  let session;
   try {
-    const session = await api("/api/session");
-    if (!session.authenticated) {
-      showLogin();
-      return;
-    }
-    showApp(session.auth_required);
+    session = await api("/api/session");
   } catch (error) {
     showError(error.message);
     return;
   }
+  providers = session.providers || providers;
+
+  const incoming = urlParams;
+  urlParams = { reset: null, verified: false, authError: null };
+
+  if (incoming.reset) {
+    resetToken = incoming.reset;
+    showLogin();
+    showAuthPanel("reset");
+    return;
+  }
+
+  if (!session.authenticated) {
+    showAuthPanel("main");
+    showLogin(incoming.authError ? (AUTH_ERRORS[incoming.authError] || "Sign-in did not work.") : "");
+    return;
+  }
+
+  showAuthPanel("main");
+  showApp(session.user);
+  if (incoming.verified) showNotice("Your email is confirmed. Welcome to TripMate AI!");
+  else if (incoming.authError) showNotice(AUTH_ERRORS[incoming.authError] || "That sign-in link did not work.");
 
   await loadTrips();
   if (currentThreadId) {

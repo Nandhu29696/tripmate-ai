@@ -14,13 +14,17 @@ sys.path.insert(0, str(ROOT))
 # Must be set before `config` is imported anywhere.
 os.environ.setdefault("GROQ_API_KEY", "test-key")
 os.environ["SESSION_SECRET"] = "test-secret-test-secret-test-secret"
-os.environ["APP_ACCESS_KEY"] = ""
+os.environ["GOOGLE_CLIENT_ID"] = ""
+os.environ["GOOGLE_CLIENT_SECRET"] = ""
+os.environ["SMTP_HOST"] = ""
 os.environ["DATABASE_URL"] = "postgresql://unused:unused@127.0.0.1:1/unused"
 
 import backend  # noqa: E402
 import config  # noqa: E402
+import mailer  # noqa: E402
 import mcp_client  # noqa: E402
 import security  # noqa: E402
+from accounts import InMemoryUserStore  # noqa: E402
 from store import InMemoryThreadRegistry  # noqa: E402
 
 ALL_AGENTS = ["flight_agent", "hotel_agent", "weather_agent", "budget_agent", "itinerary_agent"]
@@ -112,19 +116,47 @@ def wired(llm, mcp_calls):
     from langgraph.checkpoint.memory import InMemorySaver
 
     registry = InMemoryThreadRegistry()
-    backend.init_backend_for_tests(InMemorySaver(), registry)
-    yield SimpleNamespace(llm=llm, mcp=mcp_calls, registry=registry)
-    backend._travel_graph = backend._checkpointer = backend._registry = None
+    users = InMemoryUserStore()
+    backend.init_backend_for_tests(InMemorySaver(), registry, users)
+    yield SimpleNamespace(llm=llm, mcp=mcp_calls, registry=registry, users=users)
+    backend._travel_graph = backend._checkpointer = backend._registry = backend._users = None
 
 
 @pytest.fixture(autouse=True)
 def fresh_limiters(monkeypatch):
     monkeypatch.setattr(security, "plan_limiter", security.SlidingWindowLimiter(5, 3600))
     monkeypatch.setattr(security, "daily_limiter", security.SlidingWindowLimiter(300, 86400))
-    monkeypatch.setattr(security, "login_failures", security.SlidingWindowLimiter(5, 900))
+    monkeypatch.setattr(security, "login_failures_ip", security.SlidingWindowLimiter(10, 900))
+    monkeypatch.setattr(security, "login_failures_email", security.SlidingWindowLimiter(5, 900))
+    monkeypatch.setattr(security, "register_limiter", security.SlidingWindowLimiter(5, 3600))
+    monkeypatch.setattr(security, "forgot_limiter", security.SlidingWindowLimiter(3, 3600))
+    monkeypatch.setattr(security, "forgot_ip_limiter", security.SlidingWindowLimiter(10, 3600))
+    monkeypatch.setattr(security, "resend_limiter", security.SlidingWindowLimiter(3, 3600))
 
 
 @pytest.fixture(autouse=True)
 def fresh_flight_state(monkeypatch):
     monkeypatch.setattr(backend, "_routes_endpoint_available", True)
     backend._route_cache.clear()
+
+
+@pytest.fixture
+def mailbox(monkeypatch):
+    """Capture outgoing email synchronously instead of sending it."""
+    sent = []
+    monkeypatch.setattr(mailer, "_sink", lambda to, subject, body: sent.append({"to": to, "subject": subject, "body": body}))
+    monkeypatch.setattr(mailer, "send_email", lambda to, subject, body: mailer._deliver(to, subject, body))
+    return sent
+
+
+def signed_in_client(users, email="user@example.com", name="Test User"):
+    """A TestClient holding a valid session cookie for a verified user."""
+    from fastapi.testclient import TestClient
+
+    import app as app_module
+
+    user = users.get_by_email(email) or users.create_user(email, name, None, None, True)
+    client = TestClient(app_module.app)
+    client.cookies.set("tm_session", security.issue_session_token(user["id"]))
+    client.user = user
+    return client

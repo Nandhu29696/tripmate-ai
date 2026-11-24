@@ -48,7 +48,9 @@ Set `GROQ_API_KEY`, keep `GROQ_MODEL` at a model available to that key, and set 
 Also set, in `.env.production`:
 
 - `SESSION_SECRET` (**required**): signs session cookies. Generate it with `openssl rand -hex 32`. `deploy.sh` refuses to run without it.
-- `APP_ACCESS_KEY` (**strongly recommended**): users must enter this key to use the app. If left empty the app is open to anyone and is protected only by the per-session and daily quotas (`deploy.sh` prints a warning).
+- `PUBLIC_BASE_URL` (**required**): the site's https URL with no trailing slash, e.g. `https://tripmate-ai.jagoindia.in`. It builds the Google redirect URI and the links in emails, so they can never come from a forged `Host` header. `deploy.sh` refuses to run without it.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: enable "Continue with Google" (setup steps are in the project README). In Google Cloud, register `https://tripmate-ai.jagoindia.in/auth/google/callback` as an authorized redirect URI.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`: outgoing mail for confirmation and password-reset links. Without them email sign-up cannot work for real users (`deploy.sh` warns).
 - Optional provider keys (`TAVILY_API_KEY`, `AVIATION_STACK_API_KEY`, `OPENWEATHER_API_KEY`) and the tuning values listed in `.env.production.example`.
 
 ## 3. Deploy the container
@@ -97,7 +99,7 @@ sudo cp deploy/nginx/tripmate-rate-limit.conf /etc/nginx/conf.d/tripmate-rate-li
 sudo cp deploy/nginx/tripmate-location.conf /etc/nginx/snippets/tripmate-location.conf
 ```
 
-Inside the HTTPS `server {}` block for `tripmate-ai.jagoindia.in`, add `include /etc/nginx/snippets/tripmate-location.conf;`. Replace any existing catch-all `location /` for this site rather than adding a duplicate. The included locations proxy the UI and API to `127.0.0.1:8014`, preserve forwarding headers, and apply two limits per IP: **5 requests/minute (burst 2)** on the expensive plan endpoints (`/api/travel`, `/api/travel/approve` and their `/stream` variants), and **60 requests/minute (burst 20)** on all other `/api/` routes so a page reload never trips the limit. They hide the interactive OpenAPI docs and the internal `/ready` endpoint. Three details matter and were each verified against a running Nginx: the strict limit is a regex location, so the generic `/api/` location must stay a plain prefix (a `^~` prefix would silently bypass the strict limit); `Host` is forwarded as `$http_host` so the app's CSRF origin check still matches when the site is served on a non-default port; and `proxy_buffering off` on the plan endpoints lets the progress stream reach the browser immediately. Security headers (CSP, HSTS over HTTPS, X-Frame-Options, ...) are set by the application itself.
+Inside the HTTPS `server {}` block for `tripmate-ai.jagoindia.in`, add `include /etc/nginx/snippets/tripmate-location.conf;`. Replace any existing catch-all `location /` for this site rather than adding a duplicate. The included locations proxy the UI and API to `127.0.0.1:8014`, preserve forwarding headers, and apply three limits per IP: **5 requests/minute (burst 2)** on the expensive plan endpoints (`/api/travel`, `/api/travel/approve` and their `/stream` variants), **10 requests/minute (burst 5)** on the password endpoints (`/api/auth/register|login|forgot|reset`), and **60 requests/minute (burst 20)** on everything else under `/api/` and on `/auth/` (Google redirect and email links) so a page reload never trips the limit. They hide the interactive OpenAPI docs and the internal `/ready` endpoint. Three details matter and were each verified against a running Nginx: the strict limit is a regex location, so the generic `/api/` location must stay a plain prefix (a `^~` prefix would silently bypass the strict limit); `Host` is forwarded as `$http_host` so the app's CSRF origin check still matches when the site is served on a non-default port; and `proxy_buffering off` on the plan endpoints lets the progress stream reach the browser immediately. Security headers (CSP, HSTS over HTTPS, X-Frame-Options, ...) are set by the application itself.
 
 Validate, reload Nginx, and verify the site and certificate:
 
@@ -120,7 +122,7 @@ Stop only the app container without touching PostgreSQL:
 docker compose --env-file .env.production -f docker-compose.prod.yml down
 ```
 
-Access control: set `APP_ACCESS_KEY` so only people with the key can create trips; every trip is bound to the signed session that created it, and other sessions get 404. Quotas (`MAX_PLANS_PER_SESSION_PER_HOUR`, `MAX_PLANS_PER_DAY`) are counted in process memory, so run a single worker. Prompts and generated plans are stored in PostgreSQL checkpoints and are deleted automatically after `RETENTION_DAYS` (default 30) or when a user deletes a trip; configure database backups, access controls and key rotation to match your retention policy.
+Access control: every user signs in with email + password (confirmed by an emailed link) or Google, and every trip belongs to its owner (other users get 404). Quotas (`MAX_PLANS_PER_USER_PER_HOUR`, `MAX_PLANS_PER_DAY`) and sign-in throttles are counted in process memory, so run a single worker. Accounts, trips and prompts are stored in PostgreSQL; trips are deleted automatically after `RETENTION_DAYS` (default 30) or when the user deletes them, and "Delete account" removes everything for that user. Configure database backups, access controls and key rotation to match your retention policy.
 
 ## Troubleshooting
 
@@ -129,7 +131,9 @@ Access control: set `APP_ACCESS_KEY` so only people with the key can create trip
 - **Nginx 404 or duplicate location error:** include the proxy locations inside the correct TLS server block and replace, rather than duplicate, an existing `location /`.
 - **Certificate hostname mismatch:** confirm the A/AAAA records point to this VPS and renew/install a certificate that includes `tripmate-ai.jagoindia.in`.
 - **Nginx 429:** a per-IP limit is active (5/min on plan endpoints, 60/min elsewhere); adjust `rate` and `burst` in the Nginx snippets. An application-level 429 carries a JSON body and `Retry-After` (plan quota or Groq rate limit).
-- **Everyone is asked for an access key / sessions end on restart:** set `SESSION_SECRET` (without it an ephemeral key is generated on each start). Sessions last `SESSION_TTL_SECONDS` (12 h).
+- **Everyone is signed out after a restart:** set `SESSION_SECRET` (without it an ephemeral key is generated on each start). Sessions last `SESSION_TTL_SECONDS` (12 h).
+- **Confirmation / reset emails never arrive:** check `SMTP_*` and the app log (`Email delivery failed`). With `SMTP_HOST` empty the link is only written to the log as `DEV MAIL`.
+- **Google says `redirect_uri_mismatch`:** the URI registered in Google Cloud must equal `PUBLIC_BASE_URL` + `/auth/google/callback` exactly.
 - **`/ready` returns 503:** the database is unreachable; check PostgreSQL and `DATABASE_URL`. `/health` stays green because it only reports that the process is alive.
 - **Groq errors:** verify the model ID is available to the configured key and account TPM limits allow the request.
 - **Deployment on a non-Linux Docker host:** this Compose file relies on Linux host networking; use a bridge-network deployment design instead.

@@ -1,22 +1,25 @@
 """HTTP-level tests. The lifespan (real database) is not started: the backend
 is wired to in-memory components by the ``wired`` fixture."""
 
+import uuid
+
 import groq
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import backend
 import config
 import security
 from app import app
+from tests.conftest import signed_in_client
 
 PROMPT = "Plan a 7-day Japan trip from Dhaka in October."
 
 
 def new_client() -> TestClient:
-    client = TestClient(app)
-    assert client.get("/api/session").json()["authenticated"] is True
-    return client
+    """A client signed in as a fresh verified user."""
+    return signed_in_client(backend.get_user_store(), email=f"{uuid.uuid4().hex[:10]}@example.com")
 
 
 @pytest.fixture
@@ -55,24 +58,6 @@ def test_api_requires_a_session(wired):
     assert response.json()["success"] is False
 
 
-def test_access_key_login_flow_and_throttle(wired, monkeypatch):
-    monkeypatch.setattr(config, "APP_ACCESS_KEY", "s3cret")
-    client = TestClient(app)
-
-    status = client.get("/api/session").json()
-    assert status == {"success": True, "authenticated": False, "auth_required": True}
-    assert client.post("/api/travel", json={"message": PROMPT}).status_code == 401
-
-    assert client.post("/api/session", json={"access_key": "wrong"}).status_code == 401
-    assert client.post("/api/session", json={"access_key": "s3cret"}).status_code == 200
-    assert client.post("/api/travel", json={"message": PROMPT}).status_code == 200
-
-    monkeypatch.setattr(security, "login_failures", security.SlidingWindowLimiter(5, 900))
-    brute = TestClient(app)
-    for _ in range(5):
-        assert brute.post("/api/session", json={"access_key": "nope"}).status_code == 401
-    blocked = brute.post("/api/session", json={"access_key": "s3cret"})
-    assert blocked.status_code == 429 and "retry-after" in blocked.headers
 
 
 def test_cross_origin_post_is_blocked(client):

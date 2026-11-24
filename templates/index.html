@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TripMate AI</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=1">
-  <link rel="stylesheet" href="/static/style.css?v=5">
+  <link rel="stylesheet" href="/static/style.css?v=6">
 </head>
 <body>
   <div class="page-bg">
@@ -20,27 +20,81 @@
         <span>TripMate <span class="brand-light">AI</span></span>
       </a>
       <div class="topbar-actions">
-        <span class="workspace-label"><span class="status-dot"></span> Your workspace</span>
+        <span class="workspace-label"><span class="status-dot"></span> <span id="userName">Your workspace</span></span>
         <button id="logoutBtn" class="new-trip-btn hidden" type="button" data-action="logout">Sign out</button>
+        <button id="deleteAccountBtn" class="new-trip-btn hidden" type="button" data-action="delete-account">Delete account</button>
         <button class="new-trip-btn" type="button" data-action="new-trip">New trip</button>
       </div>
     </header>
 
-    <section id="loginSection" class="login-section hidden" aria-labelledby="loginTitle">
+    <section id="authSection" class="login-section hidden" aria-labelledby="authTitle">
       <div class="card-header">
         <div>
-          <span class="section-kicker">ACCESS <span>PRIVATE BETA</span></span>
-          <h2 id="loginTitle">Enter your access key</h2>
-          <p>TripMate AI is invitation-only. Enter the key you were given to start planning.</p>
+          <span class="section-kicker">WELCOME <span>YOUR TRIP STUDIO</span></span>
+          <h2 id="authTitle">Sign in to plan your trip</h2>
+          <p id="authLead">Your trips are saved to your account, so you can pick them up on any device.</p>
         </div>
       </div>
-      <label class="field-label" for="accessKey">Access key</label>
-      <input id="accessKey" class="text-input" type="password" autocomplete="current-password" maxlength="200">
-      <div class="submit-row">
-        <span id="loginMessage" class="keyboard-hint" role="status"></span>
-        <button id="loginBtn" type="button" data-action="login">Continue <span aria-hidden="true">→</span></button>
+
+      <div id="authMain">
+        <div id="googleBlock" class="hidden">
+          <a class="google-btn" href="/auth/google/login">
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
+              <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.5l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.6 5.9c4.4-4.1 7-10.1 7-17.6z"/>
+              <path fill="#FBBC05" d="M10.5 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.9-6.1C.9 16.4 0 20.1 0 24s.9 7.6 2.6 10.8l7.9-6.1z"/>
+              <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.6-5.9c-2.1 1.4-4.9 2.3-8.3 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/>
+            </svg>
+            <span>Continue with Google</span>
+          </a>
+          <div class="auth-divider"><span>or use your email</span></div>
+        </div>
+
+        <div class="auth-tabs" role="tablist" aria-label="Sign in or create an account">
+          <button id="tabSignin" type="button" role="tab" aria-selected="true" data-action="auth-tab" data-tab="signin">Sign in</button>
+          <button id="tabSignup" type="button" role="tab" aria-selected="false" data-action="auth-tab" data-tab="signup">Create account</button>
+        </div>
+
+        <form id="authForm" novalidate>
+          <div id="nameField" class="hidden">
+            <label class="field-label" for="authName">Your name (optional)</label>
+            <input id="authName" class="text-input" type="text" autocomplete="name" maxlength="80">
+          </div>
+          <label class="field-label" for="authEmail">Email</label>
+          <input id="authEmail" class="text-input" type="email" autocomplete="email" maxlength="254" required>
+          <label class="field-label" for="authPassword">Password</label>
+          <input id="authPassword" class="text-input" type="password" autocomplete="current-password" maxlength="128" required>
+          <p id="passwordHint" class="auth-hint hidden">Use at least 10 characters. A few random words make a strong password.</p>
+          <div class="submit-row">
+            <span id="authMessage" class="keyboard-hint" role="status" aria-live="polite"></span>
+            <button id="authSubmit" type="submit">Sign in <span aria-hidden="true">→</span></button>
+          </div>
+          <button id="forgotLink" type="button" class="link-btn" data-action="show-forgot">Forgot your password?</button>
+        </form>
       </div>
+
+      <form id="forgotForm" class="hidden" novalidate>
+        <label class="field-label" for="forgotEmail">Email for your account</label>
+        <input id="forgotEmail" class="text-input" type="email" autocomplete="email" maxlength="254" required>
+        <div class="submit-row">
+          <span id="forgotMessage" class="keyboard-hint" role="status" aria-live="polite"></span>
+          <button id="forgotSubmit" type="submit">Send reset link</button>
+        </div>
+        <button type="button" class="link-btn" data-action="back-to-signin">Back to sign in</button>
+      </form>
+
+      <form id="resetForm" class="hidden" novalidate>
+        <label class="field-label" for="resetPassword">Choose a new password</label>
+        <input id="resetPassword" class="text-input" type="password" autocomplete="new-password" maxlength="128" required>
+        <p class="auth-hint">Use at least 10 characters.</p>
+        <div class="submit-row">
+          <span id="resetMessage" class="keyboard-hint" role="status" aria-live="polite"></span>
+          <button id="resetSubmit" type="submit">Set new password</button>
+        </div>
+      </form>
     </section>
+
+    <section id="noticeBox" class="notice-box hidden" role="status"></section>
 
     <section class="hero-section">
       <div class="hero-copy">
@@ -68,7 +122,7 @@
       <ul id="tripList" class="trip-list"></ul>
     </section>
 
-    <section class="planner-card" id="plannerSection">
+    <section class="planner-card hidden" id="plannerSection">
       <div class="card-header">
         <div>
           <span class="section-kicker">01 <span>START PLANNING</span></span>
@@ -216,6 +270,6 @@
   <script src="/static/vendor/marked.min.js"></script>
   <script src="/static/vendor/purify.min.js"></script>
   <script src="/static/vendor/html2pdf.bundle.min.js"></script>
-  <script src="/static/script.js?v=5"></script>
+  <script src="/static/script.js?v=7"></script>
 </body>
 </html>

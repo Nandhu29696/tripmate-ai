@@ -107,11 +107,37 @@ GUARDRAIL_FAIL_OPEN = _bool("GUARDRAIL_FAIL_OPEN", False)
 MAX_MESSAGE_CHARS = _int("MAX_MESSAGE_CHARS", 4000)
 MAX_FEEDBACK_CHARS = _int("MAX_FEEDBACK_CHARS", 2000)
 
-# Access control and quotas (F-01, F-02)
-APP_ACCESS_KEY = os.getenv("APP_ACCESS_KEY", "")
+# Accounts, sessions and quotas (F-01, F-02)
 SESSION_TTL_SECONDS = _int("SESSION_TTL_SECONDS", 12 * 3600)
-MAX_PLANS_PER_SESSION_PER_HOUR = _int("MAX_PLANS_PER_SESSION_PER_HOUR", 5)
+# Per signed-in user. MAX_PLANS_PER_SESSION_PER_HOUR is the old name, still honoured.
+MAX_PLANS_PER_USER_PER_HOUR = _int(
+    "MAX_PLANS_PER_USER_PER_HOUR", _int("MAX_PLANS_PER_SESSION_PER_HOUR", 5)
+)
 MAX_PLANS_PER_DAY = _int("MAX_PLANS_PER_DAY", 300)
+
+# Email + password accounts
+MIN_PASSWORD_LENGTH = _int("MIN_PASSWORD_LENGTH", 10)
+REGISTER_PER_IP_PER_HOUR = _int("REGISTER_PER_IP_PER_HOUR", 5)
+FORGOT_PER_EMAIL_PER_HOUR = _int("FORGOT_PER_EMAIL_PER_HOUR", 3)
+VERIFY_TOKEN_TTL_SECONDS = _int("VERIFY_TOKEN_TTL_SECONDS", 24 * 3600)
+RESET_TOKEN_TTL_SECONDS = _int("RESET_TOKEN_TTL_SECONDS", 3600)
+
+# Google sign-in (OAuth 2.0 / OpenID Connect). Leave empty to hide the button.
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+
+# Public site URL, used for the Google redirect URI and links in emails, e.g.
+# https://tripmate-ai.jagoindia.in . Falls back to the request's own URL.
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
+
+# Outgoing mail (verification and password reset). Without SMTP_HOST the
+# message is written to the log instead, which is only suitable for development.
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = _int("SMTP_PORT", 587)
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USER or "no-reply@localhost"
+SMTP_STARTTLS = _bool("SMTP_STARTTLS", True)
 
 # Data retention (F-11)
 RETENTION_DAYS = _int("RETENTION_DAYS", 30)

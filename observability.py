@@ -155,6 +155,9 @@ _REQUEST_DDL = (
         ip          TEXT NOT NULL DEFAULT ''
     )
     """,
+    "ALTER TABLE api_request_logs ADD COLUMN IF NOT EXISTS input_tokens INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE api_request_logs ADD COLUMN IF NOT EXISTS output_tokens INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE api_request_logs ADD COLUMN IF NOT EXISTS llm_calls INTEGER NOT NULL DEFAULT 0",
     "CREATE INDEX IF NOT EXISTS api_request_logs_ts_idx ON api_request_logs (ts DESC)",
     """
     CREATE TABLE IF NOT EXISTS admin_audit_log (
@@ -171,7 +174,7 @@ _REQUEST_DDL = (
     "CREATE INDEX IF NOT EXISTS admin_audit_log_ts_idx ON admin_audit_log (ts DESC)",
 )
 
-_REQUEST_COLUMNS = "id, ts, request_id, method, path, status, duration_ms, user_id, ip"
+_REQUEST_COLUMNS = "id, ts, request_id, method, path, status, duration_ms, user_id, ip, input_tokens, output_tokens, llm_calls"
 
 
 def _req_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -268,6 +271,9 @@ def _stats_from_rows(rows: list[dict[str, Any]], hours: int) -> dict[str, Any]:
         "server_errors": sum(1 for r in rows if int(r["status"]) >= 500),
         "avg_ms": round(sum(durations) / len(durations), 1) if durations else 0.0,
         "p95_ms": _percentile(durations, 0.95),
+        "input_tokens": sum(int(r.get("input_tokens", 0)) for r in rows),
+        "output_tokens": sum(int(r.get("output_tokens", 0)) for r in rows),
+        "llm_calls": sum(int(r.get("llm_calls", 0)) for r in rows),
         "series": [{"hour": k, **v} for k, v in sorted(buckets.items())],
     }
 
@@ -327,11 +333,12 @@ class PostgresLogStore:
         try:
             with self._pool.connection() as conn, conn.cursor() as cur:
                 cur.executemany(
-                    "INSERT INTO api_request_logs (ts, request_id, method, path, status, duration_ms, user_id, ip) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    "INSERT INTO api_request_logs (ts, request_id, method, path, status, duration_ms, user_id, ip, "
+                    "input_tokens, output_tokens, llm_calls) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     [
                         (e["ts"], e["request_id"], e["method"], e["path"], e["status"],
-                         e["duration_ms"], e["user_id"], e["ip"])
+                         e["duration_ms"], e["user_id"], e["ip"],
+                         e.get("input_tokens", 0), e.get("output_tokens", 0), e.get("llm_calls", 0))
                         for e in batch
                     ],
                 )
@@ -405,7 +412,9 @@ class PostgresLogStore:
                 "count(*) FILTER (WHERE status BETWEEN 400 AND 499) AS client_errors, "
                 "count(*) FILTER (WHERE status >= 500) AS server_errors, "
                 "coalesce(avg(duration_ms), 0) AS avg_ms, "
-                "coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms), 0) AS p95_ms "
+                "coalesce(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms), 0) AS p95_ms, "
+                "coalesce(sum(input_tokens), 0) AS input_tokens, coalesce(sum(output_tokens), 0) AS output_tokens, "
+                "coalesce(sum(llm_calls), 0) AS llm_calls "
                 "FROM api_request_logs WHERE ts > now() - make_interval(hours => %s)",
                 (hours,),
             ).fetchone()
@@ -423,6 +432,9 @@ class PostgresLogStore:
             "server_errors": head["server_errors"],
             "avg_ms": round(float(head["avg_ms"]), 1),
             "p95_ms": round(float(head["p95_ms"]), 1),
+            "input_tokens": int(head["input_tokens"]),
+            "output_tokens": int(head["output_tokens"]),
+            "llm_calls": int(head["llm_calls"]),
             "series": [{"hour": _iso(s["hour"]), "requests": s["requests"], "errors": s["errors"]} for s in series],
         }
 
@@ -458,7 +470,7 @@ def reset_memory() -> None:
 
 
 def record_request(method: str, path: str, status: int, duration_ms: float, user_id: str | None, ip: str,
-                   request_id: str | None = None) -> None:
+                   request_id: str | None = None, usage: dict[str, int] | None = None) -> None:
     if path in _SKIP_PATHS or path.startswith(_SKIP_PATHS[-1]):
         return
     try:
@@ -472,6 +484,9 @@ def record_request(method: str, path: str, status: int, duration_ms: float, user
                 "duration_ms": round(duration_ms, 1),
                 "user_id": user_id,
                 "ip": ip,
+                "input_tokens": (usage or {}).get("input_tokens", 0),
+                "output_tokens": (usage or {}).get("output_tokens", 0),
+                "llm_calls": (usage or {}).get("llm_calls", 0),
             }
         )
     except Exception as exc:  # noqa: BLE001 - logging must never break a request

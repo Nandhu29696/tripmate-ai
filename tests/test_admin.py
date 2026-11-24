@@ -336,3 +336,111 @@ def test_streamed_request_duration_covers_the_whole_stream(wired, admin, monkeyp
     row = next(r for r in admin.get("/api/admin/logs/requests").json()["logs"] if r["path"] == "/api/travel/stream")
     assert row["status"] == 200
     assert row["duration_ms"] >= 240  # headers go out at once; the work happens while the body is sent
+
+
+# ---------------------------------------------------------------- token accounting
+def test_trip_tokens_are_added_up_per_call(wired):
+    started = backend.start_trip("usr_x", "Plan 3 days in Tokyo")
+    row = wired.registry.get(started["thread_id"])
+    # the fake model reports 100 in / 50 out per call
+    assert row["llm_calls"] == started["llm_calls"] > 0
+    assert row["input_tokens"] == 100 * row["llm_calls"]
+    assert row["output_tokens"] == 50 * row["llm_calls"]
+
+    before = row["llm_calls"]
+    backend.resume_trip("usr_x", started["thread_id"], True)
+    after = wired.registry.get(started["thread_id"])
+    assert after["llm_calls"] > before  # the final-plan call is added to the same trip
+
+
+def test_missing_provider_counts_are_estimated(wired):
+    import llm_utils
+
+    usage = llm_utils.new_usage()
+    token = llm_utils.usage_var.set(usage)
+    try:
+        wired.llm.usage_override = None
+        original = wired.llm.invoke
+
+        def no_usage(messages, max_tokens=None):
+            response = original(messages, max_tokens)
+            response.usage_metadata = {}
+            return response
+
+        wired.llm.invoke = no_usage
+        llm_utils.invoke_with_token_budget(wired.llm, "You are a flight planner.", "hello world", 100)
+    finally:
+        llm_utils.usage_var.reset(token)
+    assert usage["llm_calls"] == 1 and usage["input_tokens"] > 0 and usage["output_tokens"] > 0
+
+
+def test_request_log_and_admin_views_show_tokens(wired, admin, member):
+    response = member.post("/api/travel/stream", json={"message": "Plan 3 days in Tokyo"})
+    assert response.status_code == 200 and '"type": "result"' in response.text
+
+    logs = admin.get("/api/admin/logs/requests").json()["logs"]
+    row = next(r for r in logs if r["path"] == "/api/travel/stream")
+    assert row["llm_calls"] >= 4
+    assert row["input_tokens"] == 100 * row["llm_calls"] and row["output_tokens"] == 50 * row["llm_calls"]
+
+    trips = admin.get("/api/admin/trips").json()["trips"]
+    assert trips[0]["llm_calls"] == row["llm_calls"] and trips[0]["input_tokens"] == row["input_tokens"]
+
+    users = {u["email"]: u for u in admin.get("/api/admin/users").json()["users"]}
+    assert users["member@example.com"]["tokens"] == row["input_tokens"] + row["output_tokens"]
+
+    stats = admin.get("/api/admin/overview").json()["requests"]
+    assert stats["llm_calls"] == row["llm_calls"] and stats["input_tokens"] == row["input_tokens"]
+
+
+def test_requests_without_ai_calls_show_zero_tokens(wired, admin):
+    admin.get("/api/admin/users")
+    row = admin.get("/api/admin/logs/requests").json()["logs"][0]
+    assert row["llm_calls"] == 0 and row["input_tokens"] == 0 and row["output_tokens"] == 0
+
+
+# ---------------------------------------------------------------- India as the default starting point
+def _supervisor_with(origin: str, origin_city: str):
+    def supervisor(_prompt):
+        data = json.loads(backend_default_supervisor(_prompt))
+        data["trip_constraints"]["origin"] = origin
+        data["trip_constraints"]["origin_city"] = origin_city
+        return json.dumps(data)
+
+    return supervisor
+
+
+def backend_default_supervisor(prompt):
+    from tests.conftest import FakeLLM
+
+    return FakeLLM.default_supervisor(prompt)
+
+
+def test_trip_without_a_starting_point_starts_from_india(wired):
+    wired.llm.supervisor = _supervisor_with("", "")
+    result = backend.start_trip("usr_x", "Plan 3 days in Tokyo")
+    assert result["trip_constraints"]["origin"] == "India"
+    assert result["trip_constraints"]["origin_city"] == "Delhi"
+    assert "assumed" in result["supervisor_reasoning"] and "Delhi" in result["supervisor_reasoning"]
+
+
+def test_a_stated_starting_point_is_kept(wired):
+    wired.llm.supervisor = _supervisor_with("Bangladesh", "Dhaka")
+    result = backend.start_trip("usr_x", "Plan 3 days in Tokyo from Dhaka")
+    assert result["trip_constraints"]["origin_city"] == "Dhaka"
+    assert "assumed" not in result["supervisor_reasoning"]
+
+
+def test_from_india_without_a_city_uses_the_default_city(wired):
+    wired.llm.supervisor = _supervisor_with("India", "")
+    result = backend.start_trip("usr_x", "Plan 3 days in Tokyo from India")
+    assert result["trip_constraints"]["origin_city"] == "Delhi"
+    assert "assumed" not in result["supervisor_reasoning"]
+
+
+def test_prompts_use_rupees_and_ask_for_a_total_budget(wired):
+    backend.start_trip("usr_x", "Plan 3 days in Tokyo")
+    draft = next(c for c in wired.llm.calls if "expert travel planner" in c["system"])["user"]
+    assert "INR" in draft and "₹" in draft
+    assert "TOTAL estimated cost of the WHOLE trip" in draft and "**Per person:**" in draft
+    assert "total estimated cost of the whole trip" in draft  # also in "Trip at a glance"

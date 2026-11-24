@@ -6,6 +6,7 @@ checks. Call ``init_backend()`` once at application start (FastAPI lifespan).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import operator
@@ -22,6 +23,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 import config
+import llm_utils
 import mcp_client
 from llm_utils import (
     counts_llm_calls,
@@ -131,6 +133,10 @@ Rules for the day blocks:
   beyond the forecast give seasonal guidance and say "typically".
 - Trips longer than 7 days: keep each line to one short sentence.
 - Never invent prices or hotel names; label estimates as approximate.
+- Money: write every amount in """ + config.DEFAULT_CURRENCY + """ (use the symbol, e.g. ₹ for INR) unless the
+  request names another currency; for foreign prices add the approximate equivalent.
+- The traveller starts from """ + config.DEFAULT_ORIGIN_COUNTRY + """ unless the request names another starting point;
+  use the starting point from the trip constraints.
 """
 
 ITINERARY_FORMAT = """
@@ -140,7 +146,7 @@ Use EXACTLY this markdown structure and these headings, in this order:
 - **Destination:** <city, country>
 - **Dates:** <dates or duration>
 - **Travellers:** <who and how many>
-- **Budget:** <level and rough total>
+- **Budget:** <level, and the total estimated cost of the whole trip; must equal the Total in the Budget summary>
 - **Getting there:** <one line on the flight options>
 - **Where to stay:** <one line, area or hotel type>
 
@@ -152,7 +158,8 @@ Use EXACTLY this markdown structure and these headings, in this order:
 - **Stay:** <estimate>
 - **Food and activities:** <estimate>
 - **Local transport:** <estimate>
-- **Total:** <estimate>
+- **Total:** <TOTAL estimated cost of the WHOLE trip for ALL travellers, as one figure or a narrow range>
+- **Per person:** <total divided by the number of travellers>
 
 ## Before you go
 - <3 to 5 short bullets: documents or visa, money and SIM, bookings to make early, packing>
@@ -167,7 +174,7 @@ Use EXACTLY this markdown structure and these headings, in this order:
 - **Destination:** <city, country>
 - **Dates:** <dates or duration>
 - **Travellers:** <who and how many>
-- **Budget:** <level and rough total>
+- **Budget:** <level, and the total estimated cost of the whole trip>
 - **Getting there:** <one line>
 - **Where to stay:** <one line>
 
@@ -185,7 +192,8 @@ Use EXACTLY this markdown structure and these headings, in this order:
 - **Stay:** <estimate>
 - **Food and activities:** <estimate>
 - **Local transport:** <estimate>
-- **Total:** <estimate>
+- **Total:** <TOTAL estimated cost of the WHOLE trip for ALL travellers, as one figure or a narrow range>
+- **Per person:** <total divided by the number of travellers>
 
 ## Before you go
 - <3 to 5 short bullets>
@@ -277,6 +285,20 @@ def _clean_constraints(raw: Any) -> dict[str, Any]:
     return constraints
 
 
+def _apply_default_origin(constraints: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Trips start from India unless the request says otherwise.
+
+    Returns the constraints and whether the starting point was assumed.
+    """
+    if constraints.get("origin") or constraints.get("origin_city"):
+        if not constraints.get("origin_city") and constraints["origin"].strip().lower() == config.DEFAULT_ORIGIN_COUNTRY.lower():
+            constraints["origin_city"] = config.DEFAULT_ORIGIN_CITY  # "from India" -> a real airport city
+        return constraints, False
+    constraints["origin"] = config.DEFAULT_ORIGIN_COUNTRY
+    constraints["origin_city"] = config.DEFAULT_ORIGIN_CITY
+    return constraints, True
+
+
 def _selected_agents(state: TravelState) -> list[str]:
     selected = state.get("selected_agents", [])
     return [agent for agent in AGENT_ORDER if agent in selected]
@@ -307,7 +329,8 @@ missing.
 - budget_agent: cost, affordability, price limits, budget feasibility
 - itinerary_agent: builds the integrated plan; must always be included
 Extract trip constraints. When the destination or origin is a country or
-region, also give its main city in destination_city / origin_city.
+region, also give its main city in destination_city / origin_city. Leave the
+origin empty if the request does not say where the traveller starts.
 
 Return strict JSON only:
 {{
@@ -390,12 +413,17 @@ def supervisor_agent(state: TravelState):
     if "itinerary_agent" not in selected:
         selected.append("itinerary_agent")
 
+    constraints, assumed = _apply_default_origin(_clean_constraints(parsed.get("trip_constraints")))
+    reasoning = str(parsed.get("reasoning", "")).strip()[:500]
+    if assumed:
+        reasoning = (reasoning + f" Starting point assumed: {config.DEFAULT_ORIGIN_CITY}, {config.DEFAULT_ORIGIN_COUNTRY}.").strip()
+
     return {
         "guardrail_allowed": True,
         "guardrail_reason": reason,
         "selected_agents": selected,
-        "trip_constraints": _clean_constraints(parsed.get("trip_constraints")),
-        "supervisor_reasoning": str(parsed.get("reasoning", "")).strip()[:500],
+        "trip_constraints": constraints,
+        "supervisor_reasoning": reasoning,
         "messages": [AIMessage(content="Supervisor created the agent plan.")],
     }
 
@@ -1202,6 +1230,28 @@ def _execute(graph_input: Any, config_: dict, on_event=None) -> dict[str, Any]:
     return result
 
 
+@contextlib.contextmanager
+def _track_usage(thread_id: str):
+    """Add the tokens used inside the block to the trip's running total."""
+    usage = llm_utils.usage_var.get()
+    token = None
+    if usage is None:  # not inside a web request (tests, scripts)
+        usage = llm_utils.new_usage()
+        token = llm_utils.usage_var.set(usage)
+    before = dict(usage)
+    try:
+        yield
+    finally:
+        delta = {key: usage[key] - before[key] for key in usage}
+        if delta["llm_calls"]:
+            try:
+                _registry.add_usage(thread_id, delta["input_tokens"], delta["output_tokens"], delta["llm_calls"])
+            except Exception as exc:  # noqa: BLE001 - accounting must never fail a trip
+                logger.warning("Could not record token usage: %s: %s", type(exc).__name__, exc)
+        if token is not None:
+            llm_utils.usage_var.reset(token)
+
+
 def start_trip(owner_id: str, user_input: str, on_event=None) -> dict[str, Any]:
     """Start a new trip thread owned by ``owner_id``; pauses at human approval."""
     thread_id = f"trip_{uuid.uuid4().hex}"
@@ -1209,30 +1259,31 @@ def start_trip(owner_id: str, user_input: str, on_event=None) -> dict[str, Any]:
     config_ = {"configurable": {"thread_id": thread_id}}
 
     try:
-        result = _execute(
-            {
-                "messages": [HumanMessage(content=user_input)],
-                "user_query": user_input,
-                "guardrail_allowed": True,
-                "guardrail_reason": "",
-                "selected_agents": [],
-                "trip_constraints": _empty_constraints(),
-                "supervisor_reasoning": "",
-                "flight_results": "",
-                "hotel_results": "",
-                "weather_results": "",
-                "budget_results": "",
-                "itinerary": "",
-                "approval_request": "",
-                "approved": False,
-                "human_feedback": "",
-                "revision_count": 0,
-                "final_response": "",
-                "llm_calls": 0,
-            },
-            config_,
-            on_event,
-        )
+        with _track_usage(thread_id):
+            result = _execute(
+                {
+                    "messages": [HumanMessage(content=user_input)],
+                    "user_query": user_input,
+                    "guardrail_allowed": True,
+                    "guardrail_reason": "",
+                    "selected_agents": [],
+                    "trip_constraints": _empty_constraints(),
+                    "supervisor_reasoning": "",
+                    "flight_results": "",
+                    "hotel_results": "",
+                    "weather_results": "",
+                    "budget_results": "",
+                    "itinerary": "",
+                    "approval_request": "",
+                    "approved": False,
+                    "human_feedback": "",
+                    "revision_count": 0,
+                    "final_response": "",
+                    "llm_calls": 0,
+                },
+                config_,
+                on_event,
+            )
     except Exception:
         _registry.set_status(thread_id, "failed")
         raise
@@ -1257,11 +1308,12 @@ def resume_trip(
         if not _pending_interrupts(_graph().get_state(config_)):
             raise ThreadStateError("This trip has no draft waiting for review.")
 
-        result = _execute(
-            Command(resume={"approved": approved, "feedback": feedback.strip()}),
-            config_,
-            on_event,
-        )
+        with _track_usage(thread_id):
+            result = _execute(
+                Command(resume={"approved": approved, "feedback": feedback.strip()}),
+                config_,
+                on_event,
+            )
     finally:
         lock.release()
 

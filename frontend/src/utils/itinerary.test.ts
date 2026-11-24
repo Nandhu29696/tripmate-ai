@@ -94,6 +94,22 @@ describe("parsePlan", () => {
   });
 });
 
+describe("total budget", () => {
+  it("takes the total and per-person figure from the budget summary", () => {
+    const parsed = parsePlan("## Budget summary\n- **Stay:** 1\n- **Total:** ₹58,000\n- **Per person:** ₹29,000\n");
+    expect(parsed.budget).toEqual({ total: "₹58,000", perPerson: "₹29,000", fromSummary: true });
+  });
+
+  it("falls back to the at-a-glance budget when there is no total line", () => {
+    const parsed = parsePlan("## Trip at a glance\n- **Budget:** about ₹40,000\n\n## Day 1 - A\n- **Morning:** x\n");
+    expect(parsed.budget).toEqual({ total: "about ₹40,000", perPerson: "", fromSummary: false });
+  });
+
+  it("is null when the plan names no budget", () => {
+    expect(parsePlan("## Day 1 - A\n- **Morning:** x\n").budget).toBeNull();
+  });
+});
+
 describe("parseWeather", () => {
   it("returns null for empty text", () => {
     expect(parseWeather("  ")).toBeNull();

@@ -36,9 +36,18 @@ export type PlanBlock =
   | { kind: "glance"; items: GlanceItem[]; rest: string }
   | { kind: "days"; days: DayPlan[] };
 
+export interface PlanBudget {
+  total: string;
+  perPerson: string;
+  /** Where the total came from; the at-a-glance tile is hidden when the summary is the source. */
+  fromSummary: boolean;
+}
+
 export interface ParsedPlan {
   blocks: PlanBlock[];
   days: DayPlan[];
+  /** The trip's total estimated cost, taken from the Budget summary (or the at-a-glance Budget). */
+  budget: PlanBudget | null;
 }
 
 const DAY_HEADING = /^day\s*(\d+)\s*(?:[-–—:·|]\s*)?(.*)$/i;
@@ -123,6 +132,9 @@ function splitSections(markdown: string): Section[] {
 export function parsePlan(markdown: string): ParsedPlan {
   const blocks: PlanBlock[] = [];
   const days: DayPlan[] = [];
+  let total = "";
+  let perPerson = "";
+  let glanceBudget = "";
   let dayBlock: Extract<PlanBlock, { kind: "days" }> | null = null;
 
   for (const section of splitSections(markdown)) {
@@ -153,14 +165,25 @@ export function parsePlan(markdown: string): ParsedPlan {
         if (row) items.push({ label: row.label, value: row.text });
         else rest.push(line);
       }
+      glanceBudget = items.find((item) => /budget/i.test(item.label))?.value ?? "";
       if (items.length > 0) {
         blocks.push({ kind: "glance", items, rest: rest.join("\n").trim() });
         continue;
       }
     }
 
+    if (/budget/i.test(section.heading)) {
+      for (const line of section.lines) {
+        const row = labelled(line);
+        if (!row?.text) continue;
+        if (/^total/i.test(row.label)) total = row.text;
+        else if (/per\s*(person|traveller|traveler)/i.test(row.label)) perPerson = row.text;
+      }
+    }
+
     blocks.push({ kind: "markdown", title: stripMarkup(section.heading), body });
   }
 
-  return { blocks, days };
+  const headline = total || glanceBudget;
+  return { blocks, days, budget: headline ? { total: headline, perPerson, fromSummary: Boolean(total) } : null };
 }

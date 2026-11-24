@@ -70,4 +70,6 @@ All routes need a signed-in administrator (401 if signed out, 403 otherwise) and
 | `GET /api/admin/logs/audit` | admin actions |
 | `GET /api/admin/system`, `POST /api/admin/system/purge` | read-only non-secret settings; run retention now |
 
+Token fields: request-log rows, trip rows and the overview's `requests` block carry `input_tokens`, `output_tokens`, `llm_calls`; user rows carry `tokens`.
+
 `GET /api/session` now returns `user.role`. Middleware records every request (except `/health`, `/ready`, `/assets`) in `observability`; streamed responses are timed until the last chunk.

@@ -8,7 +8,7 @@ import { Badge, Button, Card } from "../../components/ui";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { useLoad } from "../../hooks/useLoad";
-import { formatDateTime, timeAgo } from "../../utils/format";
+import { formatDateTime, formatTokens, timeAgo } from "../../utils/format";
 import { Loadable, Pager } from "./shared";
 
 const PAGE = 25;
@@ -72,6 +72,7 @@ export function UsersTab() {
                       <th>Status</th>
                       <th>Sign-in</th>
                       <th className="num">Trips</th>
+                      <th className="num">AI tokens</th>
                       <th>Last sign-in</th>
                       <th>Actions</th>
                     </tr>
@@ -95,6 +96,7 @@ export function UsersTab() {
                           </td>
                           <td>{[user.has_password && "Password", user.has_google && "Google"].filter(Boolean).join(" + ") || "-"}</td>
                           <td className="num">{user.trips}</td>
+                          <td className="num" title={`${user.tokens.toLocaleString()} tokens`}>{formatTokens(user.tokens)}</td>
                           <td title={formatDateTime(user.last_login)}>{user.last_login ? timeAgo(user.last_login) : "Never"}</td>
                           <td>
                             {self ? (

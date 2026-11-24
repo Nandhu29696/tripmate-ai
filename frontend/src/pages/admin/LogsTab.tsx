@@ -3,7 +3,7 @@ import { adminAuditLogs, adminRequestLogs, adminSqlLogs } from "../../api/endpoi
 import { Icon } from "../../components/Icon";
 import { Badge, Button, Card } from "../../components/ui";
 import { useLoad } from "../../hooks/useLoad";
-import { formatDateTime, formatMs } from "../../utils/format";
+import { formatDateTime, formatMs, formatTokens } from "../../utils/format";
 import { Loadable, Pager, statusTone } from "./shared";
 
 type View = "requests" | "sql" | "audit";
@@ -89,6 +89,7 @@ function RequestsView() {
                       <th>Path</th>
                       <th>Status</th>
                       <th className="num">Duration</th>
+                      <th className="num">AI tokens</th>
                       <th>User</th>
                       <th>IP</th>
                       <th>Request ID</th>
@@ -108,6 +109,16 @@ function RequestsView() {
                           <Badge tone={statusTone(row.status)}>{row.status}</Badge>
                         </td>
                         <td className={`num${row.duration_ms >= 500 ? " is-slow" : ""}`}>{formatMs(row.duration_ms)}</td>
+                        <td className="num" title={row.llm_calls ? `${row.input_tokens.toLocaleString()} in / ${row.output_tokens.toLocaleString()} out, ${row.llm_calls} AI calls` : undefined}>
+                          {row.llm_calls ? (
+                            <>
+                              {formatTokens(row.input_tokens + row.output_tokens)}
+                              <span className="cell-sub">{formatTokens(row.input_tokens)} in / {formatTokens(row.output_tokens)} out</span>
+                            </>
+                          ) : (
+                            "-"
+                          )}
+                        </td>
                         <td>{row.user_id ? <code title={row.user_id}>{row.user_id.slice(0, 12)}…</code> : "-"}</td>
                         <td>{row.ip}</td>
                         <td>

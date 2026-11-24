@@ -28,10 +28,12 @@ function jumpTo(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function Glance({ items }: { items: GlanceItem[] }) {
+function Glance({ items, hideBudget }: { items: GlanceItem[]; hideBudget: boolean }) {
+  // One total only: when the budget summary has it, the banner shows it and this tile would risk a different figure.
+  const shown = hideBudget ? items.filter((item) => !/budget/i.test(item.label)) : items;
   return (
     <section className="glance" aria-label="Trip at a glance">
-      {items.map((item) => (
+      {shown.map((item) => (
         <div key={item.label} className="glance-tile">
           <span className="glance-icon">
             <Icon name={iconFor(GLANCE_ICON, item.label, "info")} size={18} />
@@ -42,6 +44,27 @@ function Glance({ items }: { items: GlanceItem[] }) {
           </div>
         </div>
       ))}
+    </section>
+  );
+}
+
+function BudgetBanner({ total, perPerson }: { total: string; perPerson: string }) {
+  return (
+    <section className="budget-banner" aria-label="Estimated total budget">
+      <span className="budget-icon">
+        <Icon name="wallet" size={22} />
+      </span>
+      <div className="budget-main">
+        <span className="budget-label">Estimated total budget</span>
+        <Markdown className="prose-inline budget-total">{total}</Markdown>
+      </div>
+      {perPerson && (
+        <div className="budget-per">
+          <span className="budget-label">Per person</span>
+          <Markdown className="prose-inline">{perPerson}</Markdown>
+        </div>
+      )}
+      <span className="budget-note">Approximate; check live prices before booking.</span>
     </section>
   );
 }
@@ -118,7 +141,8 @@ export function TripPlan({ markdown }: { markdown: string }) {
         if (block.kind === "glance") {
           return (
             <div key={index}>
-              <Glance items={block.items} />
+              <Glance items={block.items} hideBudget={Boolean(plan.budget?.fromSummary)} />
+              {plan.budget && <BudgetBanner total={plan.budget.total} perPerson={plan.budget.perPerson} />}
               {block.rest && <Markdown>{block.rest}</Markdown>}
             </div>
           );

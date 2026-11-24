@@ -722,3 +722,61 @@ body {
 .role-pill {
   margin-left: 0;
 }
+
+/* ---------- Total budget banner ---------- */
+.budget-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 22px;
+  padding: 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--brand) 30%, var(--border));
+  border-radius: var(--radius);
+  background: linear-gradient(120deg, var(--brand-soft), color-mix(in srgb, var(--brand-soft) 40%, var(--surface)));
+}
+.budget-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--grad);
+  color: #fff;
+}
+.budget-main {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.budget-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.budget-total {
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.25;
+}
+.budget-per {
+  font-weight: 650;
+}
+.budget-note {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+@media (min-width: 1200px) {
+  .stat-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media print {
+  .budget-banner {
+    break-inside: avoid;
+    border: 1px solid #bbb;
+    background: none;
+  }
+}

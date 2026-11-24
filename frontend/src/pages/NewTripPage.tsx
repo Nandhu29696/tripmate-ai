@@ -14,9 +14,9 @@ import { firstName } from "../utils/format";
 const MAX_CHARS = 4000;
 
 const SUGGESTIONS = [
-  { label: "Japan in autumn", prompt: "Plan a 7-day Japan trip from Dhaka in October for two people, including food, culture, and a mid-range budget." },
-  { label: "Dubai city break", prompt: "Plan a 5-day Dubai trip from Dhaka with comfortable hotels, local food, and a mix of city highlights and relaxing time." },
-  { label: "Thailand escape", prompt: "Plan a 7-day Thailand trip from Bangladesh with beaches, local food, budget-friendly stays, and relaxed sightseeing." },
+  { label: "Japan in autumn", prompt: "Plan a 7-day Japan trip from Delhi in October for two people, including food, culture, and a mid-range budget." },
+  { label: "Dubai city break", prompt: "Plan a 5-day Dubai trip from Mumbai with comfortable hotels, local food, and a mix of city highlights and relaxing time." },
+  { label: "Thailand escape", prompt: "Plan a 7-day Thailand trip from Bengaluru with beaches, local food, budget-friendly stays, and relaxed sightseeing." },
 ];
 
 const HOW: { icon: IconName; title: string; text: string }[] = [
@@ -96,7 +96,7 @@ export function NewTripPage() {
               maxLength={MAX_CHARS}
               rows={6}
               counter
-              placeholder="A week in Japan this fall, flying from Dhaka. We love food, quiet neighborhoods, and a mid-range budget…"
+              placeholder="A week in Japan this fall, flying from Delhi. We love food, quiet neighborhoods, and a mid-range budget…"
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === "Enter") void submit(e as unknown as FormEvent);
               }}

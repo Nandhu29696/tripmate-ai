@@ -76,6 +76,7 @@ export interface AdminUser {
   created_at: string;
   last_login: string | null;
   trips: number;
+  tokens: number;
 }
 
 export interface AdminTrip {
@@ -86,6 +87,9 @@ export interface AdminTrip {
   status: TripStatus;
   created_at: string;
   updated_at: string;
+  input_tokens: number;
+  output_tokens: number;
+  llm_calls: number;
 }
 
 export interface RequestStats {
@@ -95,6 +99,9 @@ export interface RequestStats {
   server_errors: number;
   avg_ms: number;
   p95_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  llm_calls: number;
   series: { hour: string; requests: number; errors: number }[];
 }
 
@@ -116,6 +123,9 @@ export interface RequestLog {
   duration_ms: number;
   user_id: string | null;
   ip: string;
+  input_tokens: number;
+  output_tokens: number;
+  llm_calls: number;
 }
 
 export interface SqlLog {

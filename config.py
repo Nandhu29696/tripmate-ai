@@ -149,6 +149,12 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM = os.getenv("SMTP_FROM", "").strip() or SMTP_USER or "no-reply@localhost"
 SMTP_STARTTLS = _bool("SMTP_STARTTLS", True)
 
+# Where trips start when the request does not say (the product is for travellers in India),
+# and the currency amounts are written in unless the request names another one.
+DEFAULT_ORIGIN_COUNTRY = os.getenv("DEFAULT_ORIGIN_COUNTRY", "India").strip() or "India"
+DEFAULT_ORIGIN_CITY = os.getenv("DEFAULT_ORIGIN_CITY", "Delhi").strip() or "Delhi"
+DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "INR").strip() or "INR"
+
 # Data retention (F-11)
 RETENTION_DAYS = _int("RETENTION_DAYS", 30)
 

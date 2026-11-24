@@ -7,7 +7,7 @@ import { Icon } from "../../components/Icon";
 import { Badge, Button, Card } from "../../components/ui";
 import { useToast } from "../../context/ToastContext";
 import { useLoad } from "../../hooks/useLoad";
-import { formatDateTime, STATUS_LABEL } from "../../utils/format";
+import { formatDateTime, formatTokens, STATUS_LABEL } from "../../utils/format";
 import { Loadable, Pager } from "./shared";
 
 const PAGE = 25;
@@ -81,6 +81,7 @@ export function TripsTab() {
                       <th>Trip request</th>
                       <th>Owner</th>
                       <th>Status</th>
+                      <th className="num">AI tokens</th>
                       <th>Updated</th>
                       <th>
                         <span className="sr-only">Actions</span>
@@ -94,6 +95,10 @@ export function TripsTab() {
                         <td>{trip.owner_email}</td>
                         <td>
                           <Badge tone={TONE[trip.status]}>{STATUS_LABEL[trip.status]}</Badge>
+                        </td>
+                        <td className="num" title={`${trip.input_tokens.toLocaleString()} in / ${trip.output_tokens.toLocaleString()} out, ${trip.llm_calls} AI calls`}>
+                          {formatTokens(trip.input_tokens + trip.output_tokens)}
+                          <span className="cell-sub">{trip.llm_calls} calls</span>
                         </td>
                         <td>{formatDateTime(trip.updated_at)}</td>
                         <td>

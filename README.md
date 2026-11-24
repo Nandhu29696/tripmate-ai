@@ -69,7 +69,7 @@ Flight data uses the version-pinned `aviationstack-mcp` server, started through 
 ## Tests and lint
 
 ```powershell
-python -m pytest -q      # 188 backend tests, no network or database
+python -m pytest -q      # 196 backend tests, no network or database
 ruff check .
 ```
 
@@ -130,7 +130,7 @@ cd frontend
 npm ci                  # install (uses package-lock.json)
 npm run build           # type-check + production build into frontend/dist (served by the API)
 npm run dev             # hot reload on http://localhost:5173, proxied to the API on :8000 (run python app.py too)
-npm test                # 101 tests (Vitest + Testing Library)
+npm test                # 106 tests (Vitest + Testing Library)
 npm run typecheck
 ```
 
@@ -144,9 +144,12 @@ Administrators get an **Admin console** (sidebar link, `/admin`): overview dashb
 - API request log: method, path (never the query string), status, duration (streamed planning calls are timed to the end of the stream), user id, IP, request id. Stored in PostgreSQL (`api_request_logs`), kept `LOG_RETENTION_DAYS` (14).
 - SQL log: statement text and timing only; values are never recorded. Recent 2000 statements in memory; slow ones (`SLOW_QUERY_MS`, 200) are also logged at WARNING. `LOG_SQL=false` turns it off.
 - Audit trail: `admin_audit_log` table. Set `LOG_FILE` for a rotating server log file.
+- AI tokens: input/output tokens and AI calls are recorded per request, per trip and per user (provider usage counts; a local estimate if none are sent) and shown in the console.
 - Safeguards: you cannot change, disable or delete yourself; only verified users can become admins.
 
 ## Day-wise plans
+
+Trips start from India (Delhi) when the request names no starting point (`DEFAULT_ORIGIN_CITY`, `DEFAULT_ORIGIN_COUNTRY`), amounts are in rupees (`DEFAULT_CURRENCY`), and the plan always shows the total budget for all travellers plus a per-person figure in a banner.
 
 The draft and final plan use one fixed layout (at a glance, weather outlook, one card per day with weather, morning/afternoon/evening, getting around and estimated cost, budget summary, before you go). The web app parses it into cards; plans that do not follow the layout are shown as plain text.
 

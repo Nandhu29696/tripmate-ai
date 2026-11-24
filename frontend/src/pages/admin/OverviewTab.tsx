@@ -2,7 +2,7 @@ import { adminOverview } from "../../api/endpoints";
 import type { RequestStats, TripStatus } from "../../api/types";
 import { Badge, Card } from "../../components/ui";
 import { useLoad } from "../../hooks/useLoad";
-import { formatMs, STATUS_LABEL } from "../../utils/format";
+import { formatMs, formatTokens, STATUS_LABEL } from "../../utils/format";
 import { Loadable, StatCard } from "./shared";
 
 const HOUR = 3_600_000;
@@ -56,6 +56,12 @@ export function OverviewTab() {
               tone={data.requests.server_errors ? "danger" : "success"}
             />
             <StatCard icon="clock" label="Response time" value={formatMs(data.requests.avg_ms)} sub={`95th percentile ${formatMs(data.requests.p95_ms)}`} />
+            <StatCard
+              icon="sparkles"
+              label="AI tokens (24 h)"
+              value={formatTokens(data.requests.input_tokens + data.requests.output_tokens)}
+              sub={`${formatTokens(data.requests.input_tokens)} in / ${formatTokens(data.requests.output_tokens)} out, ${data.requests.llm_calls} AI calls`}
+            />
             <StatCard
               icon="database"
               label="SQL (recent)"

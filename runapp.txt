@@ -179,10 +179,10 @@ STEP 8. DEVELOPMENT MODE (hot reload for the UI) - optional
   forwarded to the backend on port 8000).
 
   Run the checks:
-        python -m pytest -q                 (188 backend tests, no network/DB)
+        python -m pytest -q                 (196 backend tests, no network/DB)
         python -m ruff check .              (lint)
         cd frontend
-        npm test                            (101 UI tests)
+        npm test                            (106 UI tests)
         npm run typecheck
 
 

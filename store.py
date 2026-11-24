@@ -22,6 +22,7 @@ class ThreadRegistry(Protocol):
     def list_all(self, status: str = "", owner_id: str = "", limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]: ...
     def get(self, thread_id: str) -> dict[str, Any] | None: ...
     def counts(self) -> dict[str, Any]: ...
+    def add_usage(self, thread_id: str, input_tokens: int, output_tokens: int, llm_calls: int) -> None: ...
 
 
 # One statement per entry: the pool uses prepare_threshold=0 (extended
@@ -37,6 +38,9 @@ _SCHEMA_STATEMENTS = (
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    "ALTER TABLE tripmate_threads ADD COLUMN IF NOT EXISTS input_tokens BIGINT NOT NULL DEFAULT 0",
+    "ALTER TABLE tripmate_threads ADD COLUMN IF NOT EXISTS output_tokens BIGINT NOT NULL DEFAULT 0",
+    "ALTER TABLE tripmate_threads ADD COLUMN IF NOT EXISTS llm_calls INTEGER NOT NULL DEFAULT 0",
     "CREATE INDEX IF NOT EXISTS tripmate_threads_owner_idx "
     "ON tripmate_threads (owner_id, updated_at DESC)",
     "CREATE INDEX IF NOT EXISTS tripmate_threads_updated_idx "
@@ -116,17 +120,26 @@ class PostgresThreadRegistry:
         with self._pool.connection() as conn:
             total = conn.execute(f"SELECT count(*) AS n FROM tripmate_threads WHERE {clause}", tuple(params)).fetchone()["n"]
             rows = conn.execute(
-                "SELECT thread_id, owner_id, title, status, created_at, updated_at FROM tripmate_threads "
+                "SELECT thread_id, owner_id, title, status, created_at, updated_at, "
+                "input_tokens, output_tokens, llm_calls FROM tripmate_threads "
                 f"WHERE {clause} ORDER BY updated_at DESC LIMIT %s OFFSET %s",
                 (*params, limit, offset),
             ).fetchall()
         return [{**r, "created_at": _iso(r["created_at"]), "updated_at": _iso(r["updated_at"])} for r in rows], total
 
+    def add_usage(self, thread_id, input_tokens, output_tokens, llm_calls):
+        with self._pool.connection() as conn:
+            conn.execute(
+                "UPDATE tripmate_threads SET input_tokens = input_tokens + %s, output_tokens = output_tokens + %s, "
+                "llm_calls = llm_calls + %s WHERE thread_id = %s",
+                (input_tokens, output_tokens, llm_calls, thread_id),
+            )
+
     def get(self, thread_id):
         with self._pool.connection() as conn:
             row = conn.execute(
-                "SELECT thread_id, owner_id, title, status, created_at, updated_at FROM tripmate_threads "
-                "WHERE thread_id = %s", (thread_id,)
+                "SELECT thread_id, owner_id, title, status, created_at, updated_at, "
+                "input_tokens, output_tokens, llm_calls FROM tripmate_threads WHERE thread_id = %s", (thread_id,)
             ).fetchone()
         return {**row, "created_at": _iso(row["created_at"]), "updated_at": _iso(row["updated_at"])} if row else None
 
@@ -137,9 +150,11 @@ class PostgresThreadRegistry:
                 "SELECT count(*) AS n FROM tripmate_threads WHERE created_at > now() - interval '24 hours'"
             ).fetchone()["n"]
             per_owner = conn.execute(
-                "SELECT owner_id, count(*) AS n FROM tripmate_threads GROUP BY owner_id"
+                "SELECT owner_id, count(*) AS n, sum(input_tokens + output_tokens) AS tokens "
+                "FROM tripmate_threads GROUP BY owner_id"
             ).fetchall()
         return {
+            "tokens_per_owner": {r["owner_id"]: int(r["tokens"] or 0) for r in per_owner},
             "by_status": {r["status"]: int(r["n"]) for r in by_status},
             "last_24h": int(recent),
             "per_owner": {r["owner_id"]: int(r["n"]) for r in per_owner},
@@ -159,6 +174,7 @@ class InMemoryThreadRegistry:
             self._rows[thread_id] = {
                 "thread_id": thread_id, "owner_id": owner_id, "title": title[:120],
                 "status": "running", "created_at": now, "updated_at": now,
+                "input_tokens": 0, "output_tokens": 0, "llm_calls": 0,
             }
 
     def owner_of(self, thread_id: str) -> str | None:
@@ -199,15 +215,26 @@ class InMemoryThreadRegistry:
         if not r:
             return None
         return {"thread_id": r["thread_id"], "owner_id": r["owner_id"], "title": r["title"], "status": r["status"],
-                "created_at": _iso(r["created_at"]), "updated_at": _iso(r["updated_at"])}
+                "created_at": _iso(r["created_at"]), "updated_at": _iso(r["updated_at"]),
+                "input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"], "llm_calls": r["llm_calls"]}
+
+    def add_usage(self, thread_id, input_tokens, output_tokens, llm_calls):
+        with self._lock:
+            row = self._rows.get(thread_id)
+            if row:
+                row["input_tokens"] += input_tokens
+                row["output_tokens"] += output_tokens
+                row["llm_calls"] += llm_calls
 
     def counts(self):
         by_status: dict[str, int] = {}
         per_owner: dict[str, int] = {}
+        tokens: dict[str, int] = {}
         recent = 0
         cutoff = datetime.now(UTC) - timedelta(hours=24)
         for r in self._rows.values():
             by_status[r["status"]] = by_status.get(r["status"], 0) + 1
             per_owner[r["owner_id"]] = per_owner.get(r["owner_id"], 0) + 1
+            tokens[r["owner_id"]] = tokens.get(r["owner_id"], 0) + r["input_tokens"] + r["output_tokens"]
             recent += 1 if r["created_at"] > cutoff else 0
-        return {"by_status": by_status, "last_24h": recent, "per_owner": per_owner}
+        return {"by_status": by_status, "last_24h": recent, "per_owner": per_owner, "tokens_per_owner": tokens}

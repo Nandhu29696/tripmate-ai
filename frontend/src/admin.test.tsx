@@ -14,6 +14,7 @@ const OVERVIEW: AdminOverview = {
   trips: { by_status: { completed: 2, awaiting_approval: 1 }, last_24h: 1, total: 3 },
   requests: {
     hours: 24, total: 120, client_errors: 4, server_errors: 0, avg_ms: 35.2, p95_ms: 410,
+    input_tokens: 41200, output_tokens: 9300, llm_calls: 14,
     series: [{ hour: "2026-11-24T10:00:00+00:00", requests: 120, errors: 0 }],
   },
   sql: { count: 50, slow: 1, errors: 0, avg_ms: 2.5, max_ms: 230 },
@@ -24,7 +25,7 @@ function adminUser(overrides: Partial<AdminUser> = {}): AdminUser {
   return {
     id: "usr_" + "1".repeat(32), email: "bob@example.com", name: "Bob", role: "user", email_verified: true,
     has_password: true, has_google: false, is_active: true, created_at: "2026-11-01T10:00:00Z",
-    last_login: "2026-11-23T10:00:00Z", trips: 2, ...overrides,
+    last_login: "2026-11-23T10:00:00Z", trips: 2, tokens: 12345, ...overrides,
   };
 }
 
@@ -132,8 +133,8 @@ describe("logs", () => {
     signInAs("admin");
     vi.mocked(endpoints.adminRequestLogs).mockResolvedValue({
       logs: [
-        { id: 2, ts: "2026-11-24T10:00:01Z", request_id: "abc123def456", method: "POST", path: "/api/travel/stream", status: 500, duration_ms: 1520, user_id: "usr_" + "1".repeat(32), ip: "10.0.0.1" },
-        { id: 1, ts: "2026-11-24T10:00:00Z", request_id: "fff000fff000", method: "GET", path: "/api/session", status: 200, duration_ms: 3, user_id: null, ip: "10.0.0.2" },
+        { id: 2, ts: "2026-11-24T10:00:01Z", request_id: "abc123def456", method: "POST", path: "/api/travel/stream", status: 500, duration_ms: 1520, user_id: "usr_" + "1".repeat(32), ip: "10.0.0.1", input_tokens: 8200, output_tokens: 3100, llm_calls: 5 },
+        { id: 1, ts: "2026-11-24T10:00:00Z", request_id: "fff000fff000", method: "GET", path: "/api/session", status: 200, duration_ms: 3, user_id: null, ip: "10.0.0.2", input_tokens: 0, output_tokens: 0, llm_calls: 0 },
       ],
     });
     vi.mocked(endpoints.adminSqlLogs).mockResolvedValue({
@@ -199,5 +200,49 @@ describe("day-wise plan", () => {
     renderApp("/trips/" + "trip_" + "a".repeat(32));
     expect(await screen.findByText("Lisbon")).toBeInTheDocument();
     expect(screen.queryByRole("article", { name: /^Day/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("token accounting and budget", () => {
+  it("shows AI tokens on the overview, per user and per request", async () => {
+    signInAs("admin");
+    vi.mocked(endpoints.adminUsers).mockResolvedValue({ total: 1, users: [adminUser()] });
+    vi.mocked(endpoints.adminRequestLogs).mockResolvedValue({
+      logs: [
+        { id: 2, ts: "2026-11-24T10:00:01Z", request_id: "abc123def456", method: "POST", path: "/api/travel/stream", status: 200, duration_ms: 14000, user_id: null, ip: "10.0.0.1", input_tokens: 8200, output_tokens: 3100, llm_calls: 5 },
+        { id: 1, ts: "2026-11-24T10:00:00Z", request_id: "fff000fff000", method: "GET", path: "/api/session", status: 200, duration_ms: 3, user_id: null, ip: "10.0.0.2", input_tokens: 0, output_tokens: 0, llm_calls: 0 },
+      ],
+    });
+
+    const overview = renderApp("/admin");
+    expect(await screen.findByText("AI tokens (24 h)")).toBeInTheDocument();
+    expect(screen.getByText("50.5k")).toBeInTheDocument();
+    expect(screen.getByText(/41\.2k in \/ 9\.3k out, 14 AI calls/)).toBeInTheDocument();
+    overview.unmount();
+
+    const users = renderApp("/admin/users");
+    expect(await screen.findByText("12.3k")).toBeInTheDocument();
+    users.unmount();
+
+    renderApp("/admin/logs");
+    const rows = await screen.findAllByRole("row");
+    const row = rows.find((r) => within(r).queryByText("/api/travel/stream"))!;
+    expect(within(row).getByText("11.3k")).toBeInTheDocument();
+    expect(within(row).getByText("8.2k in / 3.1k out")).toBeInTheDocument();
+    const plain = rows.find((r) => within(r).queryByText("/api/session"))!;
+    expect(within(plain).queryByText(/ in \//)).not.toBeInTheDocument();
+  });
+
+  it("puts the total trip budget in a prominent banner", async () => {
+    signInAs("user");
+    const itinerary =
+      "## Trip at a glance\n- **Destination:** Goa\n- **Budget:** Mid-range, about ₹60,000 in total\n\n## Day 1 - Beach\n- **Morning:** Swim\n\n## Budget summary\n- **Stay:** ₹20,000\n- **Total:** ₹58,000 - ₹62,000 for 2 travellers\n- **Per person:** ₹29,000 - ₹31,000\n";
+    vi.mocked(endpoints.getTrip).mockResolvedValue(trip({ itinerary }));
+    renderApp("/trips/" + "trip_" + "a".repeat(32));
+    const banner = await screen.findByRole("region", { name: "Estimated total budget" });
+    expect(banner).toHaveTextContent("₹58,000 - ₹62,000 for 2 travellers");
+    expect(banner).toHaveTextContent("Per person");
+    expect(banner).toHaveTextContent("₹29,000 - ₹31,000");
+    expect(screen.queryByText(/about ₹60,000/)).not.toBeInTheDocument(); // one total only
   });
 });

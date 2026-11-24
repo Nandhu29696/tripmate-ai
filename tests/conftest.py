@@ -93,7 +93,11 @@ class FakeLLM:
         else:
             text = "Tokyo"
         finish = {"finish_reason": self.finish_reason.get(system.split('.')[0])} if self.finish_reason else {}
-        return SimpleNamespace(content=text, usage_metadata={}, response_metadata=finish)
+        return SimpleNamespace(
+            content=text,
+            usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150},
+            response_metadata=finish,
+        )
 
 
 @pytest.fixture

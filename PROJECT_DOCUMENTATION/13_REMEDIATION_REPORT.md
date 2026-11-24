@@ -187,3 +187,15 @@ Totals: 188 backend tests, 101 frontend tests, ruff clean, strict TypeScript cle
 
 Observed, not fixed: the AI provider returned HTTP 429 after several plans within a minute (the app showed its friendly error); see FUT-003.
 Not verified: Google consent screen, real SMTP, Safari/Firefox, real phones, screen readers, GitHub Actions (account billing lock).
+
+## Round: v2.3 (tokens, India default, total budget)
+
+| Item | Result | Evidence |
+|---|---|---|
+| Token accounting per request | Done | tokens/calls summed per request, trip and user; live run: admin request row = 5162 in / 2382 out / 4 calls, identical to the sum of the model's own `llm_call` log lines; approving added 1 call to the same trip |
+| Schema migration on an existing DB | Verified | dropped the new columns, restarted: all six re-created |
+| Default start from India | Done | `_apply_default_origin` (Delhi, India; "from India" gets Delhi); live run without a starting point: draft starts from Delhi, user told "Starting point assumed"; sample prompts use Indian cities; 3 tests |
+| Rupee amounts | Done | prompts require INR/₹; live run: 27 uses of ₹ |
+| Total budget shown | Confirmed and strengthened | before: only model text (Total line, often missing a per-person figure). Now the Total (all travellers) and Per person lines are mandatory and shown in a banner; the at-a-glance budget tile is hidden when the summary has a total, because the live run showed two different figures (45-55k vs 38-59k) |
+
+Totals: 196 backend tests, 106 frontend tests, live browser run 13/13.

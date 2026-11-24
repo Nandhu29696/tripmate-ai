@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextvars
 import functools
 import logging
+import threading
 import time
 from typing import Any
 
@@ -24,6 +25,27 @@ _TOKENIZER = tiktoken.get_encoding("o200k_base")
 _call_counter: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar(
     "llm_call_counter", default=None
 )
+
+
+# Token accounting for one request (admin console). A plain dict, shared by reference, so
+# every thread a request fans out to (parallel agents) adds to the same totals.
+usage_var: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar("llm_usage", default=None)
+_usage_lock = threading.Lock()
+
+
+def new_usage() -> dict[str, int]:
+    return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "llm_calls": 0}
+
+
+def record_usage(input_tokens: int, output_tokens: int, total_tokens: int | None = None) -> None:
+    usage = usage_var.get()
+    if usage is None:
+        return
+    with _usage_lock:
+        usage["input_tokens"] += input_tokens
+        usage["output_tokens"] += output_tokens
+        usage["total_tokens"] += total_tokens if total_tokens else input_tokens + output_tokens
+        usage["llm_calls"] += 1
 
 
 def counts_llm_calls(node):
@@ -115,6 +137,14 @@ def invoke_with_token_budget(
     )
 
     usage = getattr(response, "usage_metadata", None) or {}
+    if usage.get("input_tokens") is not None or usage.get("output_tokens") is not None:
+        record_usage(int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0),
+                     int(usage.get("total_tokens") or 0))
+    else:  # the provider sent no counts: estimate with the local tokenizer
+        record_usage(
+            system_tokens + len(prompt_tokens),
+            len(_TOKENIZER.encode(str(getattr(response, "content", "")), disallowed_special=())),
+        )
     meta = getattr(response, "response_metadata", None) or {}
     finish = meta.get("finish_reason", "")
     logger.info(

@@ -27,6 +27,7 @@ import admin_routes
 import auth_routes
 import backend
 import config
+import llm_utils
 import observability
 import security
 import spa
@@ -173,6 +174,8 @@ async def request_context(request: Request, call_next):
 
     request_id = new_request_id()
     token = request_id_var.set(request_id)
+    usage = llm_utils.new_usage()
+    usage_token = llm_utils.usage_var.set(usage)  # LLM calls made for this request add to it
     started = time.perf_counter()
     response = None
     logged = False
@@ -190,6 +193,7 @@ async def request_context(request: Request, call_next):
             getattr(request.state, "user_id", None),
             web.client_ip(request),
             request_id,
+            usage,
         )
 
     try:
@@ -202,6 +206,7 @@ async def request_context(request: Request, call_next):
         response = await call_next(request)
     finally:
         request_id_var.reset(token)
+        llm_utils.usage_var.reset(usage_token)
         if response is None:
             log_request(500)
         elif not hasattr(response, "body_iterator"):

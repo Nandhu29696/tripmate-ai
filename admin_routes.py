@@ -40,7 +40,7 @@ def _users():
     return backend.get_user_store()
 
 
-def _admin_view(user: dict[str, Any], trips: int = 0) -> dict[str, Any]:
+def _admin_view(user: dict[str, Any], trips: int = 0, tokens: int = 0) -> dict[str, Any]:
     return {
         "id": user["id"],
         "email": user["email"],
@@ -53,6 +53,7 @@ def _admin_view(user: dict[str, Any], trips: int = 0) -> dict[str, Any]:
         "created_at": user["created_at"],
         "last_login": user["last_login"],
         "trips": trips,
+        "tokens": tokens,
     }
 
 
@@ -96,8 +97,13 @@ def list_users(
     admin: dict = Depends(current_admin),
 ):
     rows, total = _users().list_users(q, limit, offset)
-    per_owner = backend.get_registry().counts()["per_owner"]
-    return {"success": True, "total": total, "users": [_admin_view(u, per_owner.get(u["id"], 0)) for u in rows]}
+    counts = backend.get_registry().counts()
+    per_owner, tokens = counts["per_owner"], counts["tokens_per_owner"]
+    return {
+        "success": True,
+        "total": total,
+        "users": [_admin_view(u, per_owner.get(u["id"], 0), tokens.get(u["id"], 0)) for u in rows],
+    }
 
 
 @router.patch("/users/{user_id}")

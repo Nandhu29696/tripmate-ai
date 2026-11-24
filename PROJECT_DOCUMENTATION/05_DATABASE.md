@@ -87,5 +87,6 @@ erDiagram
 
 - `users.role TEXT NOT NULL DEFAULT 'user'` (added with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
 - `api_request_logs(id, ts, request_id, method, path, status, duration_ms, user_id, ip)`, index on `ts`; written in batches by a background thread; purged after `LOG_RETENTION_DAYS`.
+- Token accounting: `api_request_logs.input_tokens/output_tokens/llm_calls` and `tripmate_threads.input_tokens/output_tokens/llm_calls` (all added with `ADD COLUMN IF NOT EXISTS`, verified on an existing database).
 - `admin_audit_log(id, ts, actor_id, actor_email, action, target, detail, ip)`.
 - SQL statement log: not a table. A psycopg cursor subclass (`observability.make_cursor_class`, set as the pool's `cursor_factory`) times each statement; only text and timing are kept, in a 2000-entry in-memory ring. Statements touching the two log tables are not recorded.

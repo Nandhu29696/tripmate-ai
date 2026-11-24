@@ -1,0 +1,254 @@
+==============================================================================
+ TripMate AI - RUN GUIDE (from a fresh machine to a running app)
+ Windows + PowerShell. Version 2.2
+==============================================================================
+
+WHAT YOU ARE SETTING UP
+  - Backend : Python 3.12, FastAPI, LangGraph, Groq AI model, MCP tools
+  - Frontend: React + TypeScript (built with Vite, served by the backend)
+  - Database: PostgreSQL 17 (Docker)
+  - Result  : one app at http://127.0.0.1:8000 (API + web pages)
+
+
+------------------------------------------------------------------------------
+STEP 0. INSTALL THE TOOLS (once)
+------------------------------------------------------------------------------
+  a) Python 3.12          https://www.python.org/downloads/
+        - tick "Add python.exe to PATH" in the installer
+  b) Node.js 22 (LTS)     https://nodejs.org/        (needed only to build the UI)
+  c) Docker Desktop       https://www.docker.com/products/docker-desktop/
+        - start it and wait until it says "Engine running"
+  d) Git                  https://git-scm.com/
+
+  Check in a new PowerShell window:
+        python --version        (3.12.x)
+        node --version          (v22.x)
+        docker --version
+        git --version
+
+  Accounts / keys you need:
+        - REQUIRED : a Groq API key        https://console.groq.com/keys
+        - OPTIONAL : Tavily key (hotel search), AviationStack key (flights),
+                     Google OAuth client (Google sign-in), SMTP account (real emails)
+          The app works without the optional ones (it shows fallback text,
+          and prints email links in the server log).
+
+
+------------------------------------------------------------------------------
+STEP 1. GET THE CODE
+------------------------------------------------------------------------------
+        git clone https://github.com/Nandhu29696/tripmate-ai.git
+        cd tripmate-ai
+        git checkout tripmate-ai-publish
+
+  IMPORTANT (Windows): keep the folder path free of the "&" character.
+  A path such as "...Safety & HITL" breaks "npm run ..." commands.
+  If your folder has an "&", use the "node node_modules/..." commands shown
+  in STEP 5 instead of "npm run ...".
+
+
+------------------------------------------------------------------------------
+STEP 2. CREATE THE SETTINGS FILE (.env)
+------------------------------------------------------------------------------
+        Copy-Item .env.example .env
+        notepad .env
+
+  Fill in at least these lines:
+
+        GROQ_API_KEY=gsk_your_key_here
+        GROQ_MODEL=openai/gpt-oss-120b
+        DATABASE_URL=postgresql://tripmate:tripmate-local-only@127.0.0.1:5433/tripmate?sslmode=disable
+        ADMIN_EMAILS=you@example.com        <- your email; becomes the administrator
+
+  Optional lines:
+        SESSION_SECRET=any-long-random-text   (keeps people signed in across restarts)
+        TAVILY_API_KEY=...                    (live hotel search)
+        AVIATION_STACK_API_KEY=...            (live flight data)
+        GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET   (Google sign-in; see STEP 9)
+        SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASSWORD / SMTP_FROM
+        LOG_FILE=tripmate.log                 (also write logs to a rotating file)
+
+  Never commit .env or share it: it contains secrets.
+
+
+------------------------------------------------------------------------------
+STEP 3. START THE DATABASE (PostgreSQL in Docker)
+------------------------------------------------------------------------------
+        docker compose up -d
+        docker compose ps                     (db should show "healthy")
+
+  - It listens on 127.0.0.1:5433 (local machine only).
+  - Data is kept in a Docker volume, so it survives restarts.
+  - Tables are created automatically when the app starts. Nothing to run by hand.
+
+  Check it manually (optional):
+        docker compose exec db psql -U tripmate -d tripmate -c "\dt"
+
+
+------------------------------------------------------------------------------
+STEP 4. SET UP THE BACKEND (Python)
+------------------------------------------------------------------------------
+        python -m venv .venv
+        .\.venv\Scripts\Activate.ps1
+
+  If PowerShell blocks the script, allow it for this window only, then retry:
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+  For running the tests and lint as well (optional):
+        pip install -r requirements-dev.txt
+
+  Extra tool for flights (optional): the AviationStack tool is started through
+  "uvx". Install uv once if you want live flight data:
+        pip install uv
+
+
+------------------------------------------------------------------------------
+STEP 5. BUILD THE FRONTEND (React)
+------------------------------------------------------------------------------
+        cd frontend
+        npm ci
+        npm run build
+        cd ..
+
+  This creates frontend\dist, which the backend serves.
+  If your path contains "&" and "npm run build" fails, use instead:
+        cd frontend
+        npm ci
+        node node_modules/typescript/bin/tsc -b
+        node node_modules/vite/bin/vite.js build
+        cd ..
+
+  If you skip this step the app starts but shows a "build the frontend" page.
+
+
+------------------------------------------------------------------------------
+STEP 6. RUN THE APP
+------------------------------------------------------------------------------
+  (virtual environment still active: you should see "(.venv)" in the prompt)
+
+        python app.py
+
+  Wait for:  "Backend ready" and "Uvicorn running on http://127.0.0.1:8000"
+  Open:      http://127.0.0.1:8000
+
+  Quick health checks (new window):
+        curl http://127.0.0.1:8000/health      -> {"status":"ok",...}
+        curl http://127.0.0.1:8000/ready       -> {"ready":true,"database":"ok"}
+
+  To stop: press Ctrl+C in the app window.
+  To stop the database: docker compose stop     (data is kept)
+
+
+------------------------------------------------------------------------------
+STEP 7. FIRST USE
+------------------------------------------------------------------------------
+  1. Open http://127.0.0.1:8000  -> you are sent to the sign-in page.
+  2. Choose "Create account", enter your email (use the one in ADMIN_EMAILS to
+     become administrator) and a password of 10+ characters.
+  3. Confirm your email:
+        - With SMTP configured: click the link in the email.
+        - Without SMTP (default locally): look in the app window (terminal) for
+          a line "DEV MAIL (SMTP not configured) to=you@example.com ..." and
+          copy the http://... link below it into your browser.
+          The link confirms the address and signs you in.
+  4. Click "New trip", describe the trip, press "Create my draft".
+  5. Watch the live progress, read the day-wise draft (weather, costs),
+     then "Looks good, finalize" or "Request changes".
+  6. Administrator: the sidebar shows "Admin console" (users, trips, API
+     request logs, SQL logs, audit trail, system).
+     If it is missing: your email is not in ADMIN_EMAILS or is not verified.
+     Fix .env, restart the app, sign out and in again.
+
+
+------------------------------------------------------------------------------
+STEP 8. DEVELOPMENT MODE (hot reload for the UI) - optional
+------------------------------------------------------------------------------
+  Terminal 1 (backend):
+        .\.venv\Scripts\Activate.ps1
+        python app.py
+
+  Terminal 2 (frontend dev server):
+        cd frontend
+        npm run dev
+        (or: node node_modules/vite/bin/vite.js)
+
+  Open http://localhost:5173  (requests to /api, /auth and /health are
+  forwarded to the backend on port 8000).
+
+  Run the checks:
+        python -m pytest -q                 (188 backend tests, no network/DB)
+        python -m ruff check .              (lint)
+        cd frontend
+        npm test                            (101 UI tests)
+        npm run typecheck
+
+
+------------------------------------------------------------------------------
+STEP 9. GOOGLE SIGN-IN - optional
+------------------------------------------------------------------------------
+  1. Google Cloud Console -> APIs & Services -> Credentials ->
+     Create credentials -> OAuth client ID -> "Web application".
+  2. Authorized redirect URI (exactly):
+        http://127.0.0.1:8000/auth/google/callback
+  3. Put the client id and secret in .env:
+        GOOGLE_CLIENT_ID=...
+        GOOGLE_CLIENT_SECRET=...
+  4. Restart the app. A "Continue with Google" button appears on the sign-in page.
+  (In production use your https address, and set PUBLIC_BASE_URL to it.)
+
+
+------------------------------------------------------------------------------
+STEP 10. REAL EMAIL (SMTP) - optional
+------------------------------------------------------------------------------
+  In .env set SMTP_HOST, SMTP_PORT (587), SMTP_USER, SMTP_PASSWORD, SMTP_FROM.
+  Restart. Confirmation and password-reset emails are then really sent.
+
+
+------------------------------------------------------------------------------
+STEP 11. RUN EVERYTHING IN DOCKER (instead of steps 4-6) - optional
+------------------------------------------------------------------------------
+  The Dockerfile builds the frontend itself, so Node is not needed.
+        docker build -t tripmate-ai .
+  See deploy\README.md and docker-compose.prod.yml for the server setup
+  (Nginx, HTTPS, SESSION_SECRET and PUBLIC_BASE_URL are required there,
+  and deploy\deploy.sh does backup, versioned image and rollback).
+
+
+------------------------------------------------------------------------------
+TROUBLESHOOTING
+------------------------------------------------------------------------------
+  "GROQ_API_KEY is missing"          -> set it in .env, restart.
+  "DATABASE_URL is missing" / cannot connect
+                                     -> run "docker compose up -d", check
+                                        "docker compose ps" is healthy, and that
+                                        DATABASE_URL uses port 5433.
+  Port 5433 or 8000 already in use   -> stop the other program, or change the port
+                                        mapping in compose.yaml / the uvicorn port.
+  Page says the frontend is not built-> do STEP 5.
+  "npm run" fails with a strange path error
+                                     -> your folder path contains "&"; use the
+                                        node ... commands in STEP 5 or move the project.
+  No confirmation email              -> SMTP is empty: copy the link from the
+                                        app window ("DEV MAIL ...").
+  "The AI service is busy" (429)     -> the Groq rate limit; wait a minute, retry.
+  Sign-up says too many attempts     -> limit is 5 per hour per network address.
+  Admin console not visible          -> see STEP 7, point 6.
+  Start again from scratch (DELETES ALL DATA):
+        docker compose down -v
+        docker compose up -d
+
+
+------------------------------------------------------------------------------
+DAILY USE (after the first setup)
+------------------------------------------------------------------------------
+        docker compose up -d
+        .\.venv\Scripts\Activate.ps1
+        python app.py
+        -> http://127.0.0.1:8000
+  After pulling new code:  pip install -r requirements.txt
+                           cd frontend; npm ci; npm run build
+
+==============================================================================

@@ -165,6 +165,7 @@ Trips, quotas and history belong to the user, so they follow the person across d
 2. **APIs & Services -> OAuth consent screen:** user type **External**; app name, support email, developer contact; add your domain (for example `tripmate-ai.jagoindia.in`) as an authorized domain; add privacy-policy and terms URLs; scopes `openid`, `email`, `profile` only (non-sensitive, no Google verification review). While the app is in **Testing**, only listed test users can sign in; switch to **In production** for everyone.
 3. **Credentials -> Create OAuth client ID -> Web application**, with these authorized redirect URIs (exact match, including scheme and path):
    - `http://127.0.0.1:8000/auth/google/callback` (local)
+   - `http://localhost:8000/auth/google/callback` (local; add this too if you open the app using `localhost`)
    - `https://tripmate-ai.jagoindia.in/auth/google/callback` (production)
 4. Put the values in `.env` / `.env.production` (never in git): `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and in production `PUBLIC_BASE_URL=https://tripmate-ai.jagoindia.in`.
 5. Email: set `SMTP_HOST`, `SMTP_PORT` (587 STARTTLS or 465 TLS), `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` with any transactional provider. Without `SMTP_HOST` the links are only written to the log, which is fine for development and unusable in production.

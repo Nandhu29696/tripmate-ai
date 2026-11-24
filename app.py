@@ -15,28 +15,25 @@ import logging
 import queue
 import threading
 import time
-from pathlib import Path
 from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 import auth_routes
 import backend
 import config
 import security
+import spa
 import web_common as web
 from web_common import current_session
 
 config.configure_logging()
 logger = logging.getLogger("tripmate.api")
 
-BASE_DIR = Path(__file__).resolve().parent
 THREAD_ID_PATTERN = r"^trip_[0-9a-f]{32}$"
 PURGE_INTERVAL_SECONDS = 6 * 3600
 
@@ -83,8 +80,6 @@ app = FastAPI(
 )
 
 app.include_router(auth_routes.router)
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 # =========================
@@ -193,8 +188,10 @@ async def request_context(request: Request, call_next):
         response.headers["Strict-Transport-Security"] = "max-age=31536000"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    elif request.url.path.startswith("/assets/") and response.status_code == 200:
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
 
-    if request.url.path not in {"/health", "/favicon.ico"} and not request.url.path.startswith("/static"):
+    if request.url.path not in {"/health", "/favicon.ico"} and not request.url.path.startswith("/assets"):
         logger.info(
             "%s %s -> %s in %dms",
             request.method,
@@ -203,14 +200,6 @@ async def request_context(request: Request, call_next):
             (time.perf_counter() - started) * 1000,
         )
     return response
-
-
-# =========================
-# Pages and session
-# =========================
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse(request=request, name="index.html", context={})
 
 
 # =========================
@@ -381,6 +370,10 @@ def readiness_check():
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
     return Response(status_code=204)
+
+
+# Must be last: its catch-all route only sees paths no other route handled.
+spa.mount_spa(app, config.FRONTEND_DIST)
 
 
 if __name__ == "__main__":

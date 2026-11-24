@@ -23,7 +23,8 @@ Key ideas:
 - `mailer.py`: SMTP email (logs the message when SMTP is not configured)
 - `web_common.py`: shared helpers (session cookie, current user, error responses)
 - `store.py`: thread ownership registry (`tripmate_threads` table)
-- `templates/`, `static/`: UI (libraries are self-hosted in `static/vendor/`)
+- `frontend/`: the web app, React 19 + TypeScript + Vite (see "Frontend" below)
+- `spa.py`: serves the built app and falls back to `index.html` for client-side routes
 - `tests/`: pytest suite (no network or database needed)
 - `deploy/`: production runbook, `deploy.sh`, Nginx fragments
 - `PROJECT_DOCUMENTATION/`: architecture, API, security review and remediation report
@@ -61,18 +62,18 @@ python -m pip install -r requirements-dev.txt
 python app.py
 ```
 
-Open http://127.0.0.1:8000 and create an account. Without `SMTP_HOST` the confirmation and reset links are written to the app log (look for `DEV MAIL`), so copy the link from the terminal. Tables are created automatically at startup.
+Build the web app once (`cd frontend; npm ci; npm run build`), then open http://127.0.0.1:8000 and create an account. Without `SMTP_HOST` the confirmation and reset links are written to the app log (look for `DEV MAIL`), so copy the link from the terminal. Tables are created automatically at startup.
 
 Flight data uses the version-pinned `aviationstack-mcp` server, started through `uvx` (installed by the `uv` dependency; the first run downloads Python 3.13 for it). In Docker it is pre-installed in the image.
 
 ## Tests and lint
 
 ```powershell
-python -m pytest -q      # 124 tests, no network or database
+python -m pytest -q      # 146 backend tests, no network or database
 ruff check .
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, a script syntax check, the tests and a Docker build.
+CI (`.github/workflows/ci.yml`) runs lint and the backend tests, the frontend type-check, tests and build, then a Docker build.
 
 ## API
 
@@ -107,6 +108,33 @@ Errors are `{success:false, error, request_id}`; 401 not signed in, 404 not foun
 Required: `GROQ_API_KEY`, `DATABASE_URL`. Production also needs `SESSION_SECRET` and `PUBLIC_BASE_URL` (the site's https URL; `deploy.sh` refuses to run without them), plus `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` for Google sign-in and `SMTP_*` for email. Optional tuning (defaults): `MAX_PLANS_PER_USER_PER_HOUR=5`, `MAX_PLANS_PER_DAY=300`, `MIN_PASSWORD_LENGTH=10`, `REGISTER_PER_IP_PER_HOUR=5`, `FORGOT_PER_EMAIL_PER_HOUR=3`, `SESSION_TTL_SECONDS=43200`, `RETENTION_DAYS=30`, `MAX_REVISIONS=2`, `GUARDRAIL_FAIL_OPEN=false`, `LLM_TIMEOUT_SECONDS=60`, `LLM_MAX_RETRIES=2`, `LLM_OUTPUT_TOKENS=1000`, `LLM_OUTPUT_TOKENS_ITINERARY=2000`, `LLM_OUTPUT_TOKENS_FINAL=2600`, `LLM_MAX_INPUT_TOKENS=5200`, `MAX_MESSAGE_CHARS=4000`, `DB_POOL_MAX=10`. See `.env.example` and `.env.production.example`.
 
 Quotas are counted in process memory (single worker). Run one worker, or move the counters to a shared store before scaling out.
+
+## Frontend
+
+A single-page app in `frontend/`: **React 19, TypeScript (strict), Vite, React Router**. No UI kit; the design system is plain CSS with design tokens, a light and a dark theme (follows the system, remembers your choice) and a responsive layout with a mobile drawer.
+
+| Area | What it does |
+|---|---|
+| Public pages | `/login` (sign in and create account, Google button, live password-strength meter), `/forgot`, `/reset` |
+| Protected pages | `/` new trip, `/trips/:id` plan and review, `/account` |
+| Route guards | Signed-out visitors go to `/login` and return to the page they asked for after signing in; a 401 from any request signs the user out of the UI; signed-in visitors skip the sign-in pages |
+| Trips | Sidebar list with status, live progress while agents work (streamed), review workflow (approve, or request changes up to the revision limit), copy, **Save as PDF** (print stylesheet that prints only the plan), delete |
+| Account | Profile, sign-in methods, delete account (type `DELETE` to confirm) |
+| Safety | Model output is rendered with `react-markdown`, which never injects raw HTML and drops `javascript:` links; the build contains no inline scripts, so the strict CSP stays in force |
+| Accessibility | Skip link, labelled fields with error text, `aria-live` regions for progress and toasts, focus-visible outlines, keyboard-closable dialogs, hidden (not just off-screen) mobile drawer, reduced-motion support |
+
+Email and Google links land on `/?reset=...`, `/?verified=1` or `/?auth_error=...`; the app rewrites these to clean routes before rendering.
+
+```powershell
+cd frontend
+npm ci                  # install (uses package-lock.json)
+npm run build           # type-check + production build into frontend/dist (served by the API)
+npm run dev             # hot reload on http://localhost:5173, proxied to the API on :8000 (run python app.py too)
+npm test                # 75 tests (Vitest + Testing Library)
+npm run typecheck
+```
+
+Note for Windows: npm runs scripts through `cmd.exe`, which cannot handle an `&` in the project path. If your checkout is in a folder like `... Safety & HITL`, run the tools directly (`node node_modules/vite/bin/vite.js build`) or move the project to a path without `&`. Docker and CI are not affected.
 
 ## Accounts and Google sign-in
 

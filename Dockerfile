@@ -1,3 +1,12 @@
+# ---- Stage 1: build the React app (TypeScript check + Vite build) ----
+FROM node:22-alpine AS frontend
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+# ---- Stage 2: the API, serving the built app ----
 FROM python:3.12-slim
 
 # Pinned AviationStack MCP server (needs Python >= 3.13; uv downloads that
@@ -31,6 +40,7 @@ RUN python -m pip install --upgrade pip \
     && chmod -R a+rX /opt/uv /opt/tiktoken
 
 COPY --chown=tripmate:tripmate . .
+COPY --from=frontend --chown=tripmate:tripmate /build/dist /app/frontend/dist
 
 USER tripmate
 

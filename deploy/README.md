@@ -1,6 +1,6 @@
 # Hostinger VPS deployment
 
-This deployment runs the existing FastAPI UI and API in one Docker container. It uses the VPS host's PostgreSQL and Nginx, following the host-network pattern used by the other VPS application.
+This deployment runs the FastAPI API and the built React app in one Docker container (the image build compiles the frontend in a Node stage, so the VPS does not need Node). It uses the VPS host's PostgreSQL and Nginx, following the host-network pattern used by the other VPS application.
 
 ```text
 Browser -- HTTPS --> VPS Nginx -- HTTP over loopback --> TripMate container
@@ -137,3 +137,10 @@ Access control: every user signs in with email + password (confirmed by an email
 - **`/ready` returns 503:** the database is unreachable; check PostgreSQL and `DATABASE_URL`. `/health` stays green because it only reports that the process is alive.
 - **Groq errors:** verify the model ID is available to the configured key and account TPM limits allow the request.
 - **Deployment on a non-Linux Docker host:** this Compose file relies on Linux host networking; use a bridge-network deployment design instead.
+
+## Frontend notes
+
+- The image builds `frontend/` with `npm ci && npm run build` (type-check included); a type error fails the deploy build instead of shipping.
+- Hashed files under `/assets/` are served with `Cache-Control: public, max-age=31536000, immutable`; `index.html` is `no-cache`, so a new deploy is picked up on the next page load.
+- The app handles client-side routes (`/login`, `/trips/<id>`, `/account`, ...) by returning `index.html`, so the existing Nginx `location /` proxy needs no change and no `try_files` rules.
+- Unknown `/api/*` and `/auth/*` paths remain JSON 404s.

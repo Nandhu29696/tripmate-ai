@@ -142,6 +142,9 @@ SMTP_STARTTLS = _bool("SMTP_STARTTLS", True)
 # Data retention (F-11)
 RETENTION_DAYS = _int("RETENTION_DAYS", 30)
 
+# Built React app served by FastAPI (npm run build in frontend/). Override for tests/containers.
+FRONTEND_DIST = Path(os.getenv("FRONTEND_DIST") or BASE_DIR / "frontend" / "dist")
+
 AVIATIONSTACK_MCP_VERSION = os.getenv("AVIATIONSTACK_MCP_VERSION", "1.8.1")
 
 

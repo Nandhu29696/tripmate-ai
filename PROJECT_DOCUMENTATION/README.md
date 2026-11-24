@@ -9,7 +9,7 @@ in `.env` were never read; only variable names were listed.
 |---|----------|----------|
 | 01 | [Project overview](01_PROJECT_OVERVIEW.md) | Purpose, stack, folder map, entry points, configuration, integrations |
 | 02 | [Architecture](02_ARCHITECTURE.md) | System, graph and sequence diagrams, component communication |
-| 03 | [Frontend](03_FRONTEND.md) | Page sections, state, API usage, UX states |
+| 03 | [Frontend](03_FRONTEND.md) | **React app**: structure, routes, auth behaviour, trip lifecycle, a11y (rewritten) |
 | 04 | [Backend and API](04_BACKEND_API.md) | Endpoint table, request tracing, modules |
 | 05 | [Database](05_DATABASE.md) | Checkpoint schema, ER diagram, data lifecycle |
 | 06 | [Business workflows](06_BUSINESS_WORKFLOWS.md) | User journeys, processing steps, error scenarios |

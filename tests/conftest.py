@@ -17,6 +17,20 @@ os.environ["SESSION_SECRET"] = "test-secret-test-secret-test-secret"
 os.environ["GOOGLE_CLIENT_ID"] = ""
 os.environ["GOOGLE_CLIENT_SECRET"] = ""
 os.environ["SMTP_HOST"] = ""
+
+# A stand-in for `npm run build`, so the backend tests do not need Node.
+import tempfile  # noqa: E402
+
+FAKE_DIST = Path(tempfile.mkdtemp(prefix="tripmate-dist-"))
+(FAKE_DIST / "assets").mkdir()
+(FAKE_DIST / "index.html").write_text(
+    '<!doctype html><html><head><title>TripMate AI</title></head><body><div id="root"></div>'
+    '<script type="module" src="/assets/app-abc123.js"></script></body></html>',
+    encoding="utf8",
+)
+(FAKE_DIST / "assets" / "app-abc123.js").write_text("console.log('app');", encoding="utf8")
+(FAKE_DIST / "favicon.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>", encoding="utf8")
+os.environ["FRONTEND_DIST"] = str(FAKE_DIST)
 os.environ["DATABASE_URL"] = "postgresql://unused:unused@127.0.0.1:1/unused"
 
 import backend  # noqa: E402

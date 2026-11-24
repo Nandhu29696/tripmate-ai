@@ -45,9 +45,6 @@ def test_health_and_ready(client):
     assert ready.status_code == 200 and ready.json()["ready"] is True
 
 
-def test_vendored_frontend_libraries_are_served(client):
-    for name in ("marked.min.js", "purify.min.js", "html2pdf.bundle.min.js"):
-        assert client.get(f"/static/vendor/{name}").status_code == 200
 
 
 # ---- authentication and sessions --------------------------------------------

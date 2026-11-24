@@ -142,3 +142,31 @@ Replaces the shared access key and anonymous sessions. Design and setup steps ar
 **Behaviour changes:** `APP_ACCESS_KEY`, `POST /api/session` and anonymous sessions are removed; `MAX_PLANS_PER_SESSION_PER_HOUR` is now `MAX_PLANS_PER_USER_PER_HOUR` (old name still read); the session cookie is `SameSite=Lax` (needed for the Google and email-link redirects; state-changing requests are POST/DELETE with an Origin check); `deploy.sh` now requires `PUBLIC_BASE_URL` and warns when Google or SMTP settings are empty.
 
 **Residual risks:** the session is a stateless token, so signing out clears the cookie but a stolen cookie stays valid until it expires (12 h) or the password is reset; sign-up throttles are per process; open sign-up means anyone can create an account, so the per-user and daily caps are the cost controls (a CAPTCHA such as Cloudflare Turnstile is the next step if abuse appears).
+
+## Follow-up round: React frontend with authentication
+
+Replaced the vanilla-JS page with a React 19 + TypeScript + Vite single-page app (see `03_FRONTEND.md`). The backend API is unchanged except that FastAPI now serves the built app (`spa.py`) and the Docker build compiles it in a Node stage.
+
+**Verification**
+
+| Check | Result |
+|---|---|
+| Frontend type-check (strict) and production build | Clean; ~145 KB gzipped, no inline scripts |
+| Frontend tests (Vitest + Testing Library) | 75 pass: stream reader (split chunks, errors, 401, interruption), URL bootstrap, hostile Markdown, route guards, every auth form state, planning, review workflow, reload handling, account deletion |
+| Backend tests | 146 pass (23 new for serving the app: client routes, asset caching, JSON 404s for API paths, path traversal, missing build) |
+| Real browser, full stack, real LLM (Playwright) | 51 of 51 checks: guards, deep-link return, sign-up with strength meter, confirmation email, live parallel progress, revision and approval, reload restore, print layout, dark theme persistence, second device on a phone viewport with drawer, password reset revoking the other device, Google redirect protections, account deletion with no orphaned rows, no CSP violations or console errors |
+| Docker build with the Node stage | Builds (`npm ci` + type-check + `vite build` inside the image) |
+
+**Bugs the tests and real browser found, all fixed:**
+
+1. *Deep-link return never worked.* After sign-in, the guard bounced to `/` before the login page could send the user back. Found by an integration test.
+2. *Reloading a trip page showed a stale draft.* The router keeps navigation state across reloads, so an approved trip reopened as the old draft with a review panel. Now the handed-over trip is only a first paint and is always revalidated; a late response never overwrites a result the user already triggered. Found by the real browser.
+3. *Short passwords got no feedback.* The strength meter was hidden for anything under the minimum; it now says "Too short".
+4. *Phone layout scrolled sideways* on pages with long unbroken text (a URL in a title, code blocks): 1158 px wide on a 390 px screen. Found by a probe with worst-case content.
+5. *Closed mobile drawer was keyboard-reachable.* It was only moved off-screen; now `visibility: hidden` while closed.
+
+**Behaviour and operations notes**
+- `/static/*` and the Jinja templates are gone; `/assets/*` (hashed, immutable cache) and `index.html` (no-cache) replace them. Nginx needs no change.
+- Without a build, the API serves a clear placeholder page (HTTP 503) instead of failing.
+- On Windows, a project path containing `&` breaks npm's `cmd.exe` scripts; Docker and CI are unaffected.
+- Not verified: behaviour on real mobile hardware and in Safari/Firefox (Chromium only), and screen-reader testing (semantics were checked by test, not by assistive technology).

@@ -17,3 +17,10 @@ htmlcov
 TripMate_AI_User_Manual.docx
 demo.excalidraw
 deploy
+frontend/node_modules
+frontend/dist
+.github
+PROJECT_DOCUMENTATION
+tests
+~$*
+*.xlsx

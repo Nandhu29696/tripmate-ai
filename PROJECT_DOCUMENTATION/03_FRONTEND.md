@@ -1,41 +1,66 @@
-# 03 - Frontend
+# 03 - Frontend (React, rewritten)
 
-> **Status:** this document is the **baseline audit** of the code before remediation. Most findings referenced here are now fixed; see [13_REMEDIATION_REPORT.md](13_REMEDIATION_REPORT.md) for the current status and evidence.
+> This replaces the original description of the vanilla-JS page. The old
+> `templates/` and `static/` files were removed.
 
-Single route `/` rendering `templates/index.html`; logic in `static/script.js`
-(361 lines), styling in `static/style.css` (1158 lines, CSS variables,
-breakpoints at 820px/600px, reduced-motion and print rules).
+**Stack:** React 19, TypeScript (strict, `noUncheckedIndexedAccess`), Vite, React
+Router 7, `react-markdown` + `remark-gfm`. No UI kit: a hand-written CSS design
+system (tokens, light/dark, responsive, print). Tests: Vitest + Testing Library.
+Production build: about 145 KB gzipped JavaScript, no inline scripts.
 
-## Sections (page-by-page)
+## Structure
 
-| Section | Purpose | Components | API | Data shown | User actions |
-|---|---|---|---|---|---|
-| Topbar | Brand, new trip | brand link, "New trip" | none | static label "Local workspace" | `startNewTrip()` clears state + `localStorage` |
-| Hero | Marketing | copy + note | none | static | none |
-| 01 Planner | Collect request | textarea, counter, 3 quick prompts, submit + spinner | `POST /api/travel` | char count | type, pick prompt, Ctrl+Enter, submit |
-| 02 Workflow | Show supervisor outcome | 3-step stepper, guardrail badge, reasoning, agent chips | reads response | `guardrail_*`, `selected_agents`, `supervisor_reasoning`, `requires_approval` | none |
-| 03 Result | Show draft/final plan | markdown box, thread id | from response | `itinerary` or `answer` | Copy, Download PDF (html2pdf) |
-| 04 Approval | HITL decision | feedback textarea, approve/revise | `POST /api/travel/approve` | `approval_request` | approve, request changes (feedback required) |
-| Error box | Failures | `role="alert"` | n/a | error message | none |
+```
+frontend/src/
+  api/         types.ts, client.ts (fetch wrapper, ApiError, central 401 hook),
+               stream.ts (NDJSON reader), endpoints.ts (one function per API call)
+  context/     AuthContext (session state), TripsContext (sidebar list), ToastContext
+  hooks/       useProgress (streamed steps), useTheme, useDocumentTitle
+  components/  ui.tsx (Button, Field, PasswordField, TextArea, Badge, Card, Skeleton),
+               Markdown, ProgressSteps, ConfirmDialog, RouteGuards, Logo, Icon
+  layouts/     AuthLayout (brand panel + card), AppLayout (sidebar, mobile drawer)
+  pages/       Login, Forgot, Reset, NewTrip, Trip, Account, NotFound
+  utils/       format.ts, urlParams.ts
+  styles.css   design system
+```
 
-## State and flow
+## Routes
 
-- Globals: `currentThreadId` (also `localStorage["travel_thread_id"]`),
-  `latestAnswerMarkdown`, `waitingForApproval`.
-- `sendMessage()` blocks while `waitingForApproval`, validates non-empty
-  input, posts `{message, thread_id}`, then shows workflow + draft + approval.
-- `submitApproval(approved)` requires feedback when rejecting.
-- Loading: buttons disabled; spinner only for draft mode.
-- Responsive: yes. Accessibility: `aria-live`, `aria-current`, labels present.
+| Route | Access | Purpose |
+|---|---|---|
+| `/login` (`?mode=signup`) | public | Sign in / create account, Google button (only if configured), strength meter |
+| `/forgot` | public | Request a reset link; same message for every address |
+| `/reset?token=` | public | Choose a new password; signs in on success |
+| `/` | signed in | New trip: description box, suggestions, how-it-works |
+| `/trips/:id` | signed in | Plan, trip team, review panel, copy / Save as PDF / delete |
+| `/account` | signed in | Profile, sign-in methods, delete account |
+| `*` | any | Friendly 404 |
 
-## Frontend observations
+## Authentication behaviour
 
-- `renderMarkdown` assigns `marked.parse()` output to `innerHTML` with no
-  sanitiser (`script.js:82`) - F-03.
-- `waitingForApproval` is memory-only while `thread_id` persists, so a reload
-  during review loses the draft UI and the pending interrupt becomes
-  unreachable - F-18.
-- CDN scripts have no integrity hashes; `marked` is unpinned
-  (`index.html:182-183`) - F-10.
-- Footer/topbar text is static ("Local workspace") in production - F-26.
-- All DOM IDs used by the script exist in the template (verified).
+- `AuthProvider` loads `GET /api/session` once; status is `loading | authenticated | anonymous | error`.
+- `RequireAuth` redirects signed-out visitors to `/login` and remembers the page they asked for;
+  `RedirectIfAuthed` sends signed-in visitors back to that page (only in-app paths are honoured).
+- Any API 401 flagged `auth_required` calls a registered handler that signs the user out of the UI,
+  so an expired or revoked session lands on `/login` from anywhere.
+- Email and Google links arrive at `/?reset=`, `/?verified=1`, `/?auth_error=`; `bootstrapUrl()` rewrites
+  the address bar before React renders (so a guard cannot discard the parameters) and queues a toast.
+
+## Trip lifecycle in the UI
+
+New trip -> `POST /api/travel/stream` -> checklist updates per event (agents run in parallel, so several
+steps are active together) -> navigate to `/trips/:id` with the result as a first paint -> the page always
+revalidates from the server (navigation state survives reloads and can be stale) and ignores a late
+response once the user has acted -> review: approve, or request changes (feedback required) -> a revised
+draft returns for another review until the revision limit, then the final plan.
+
+## Security and quality properties
+
+- Model output goes through `react-markdown`: no raw HTML, `javascript:` URLs dropped, links open with
+  `rel="noopener noreferrer"`, tables scroll inside a wrapper. Verified by tests with hostile input.
+- The build has no inline scripts, so the strict CSP (`script-src 'self'`) stays in force; fonts are system fonts.
+- Accessibility: skip link, labelled inputs with `aria-invalid`/error text, `aria-live` for progress and toasts,
+  `role="dialog"` with Escape and focus on the safe action, a closed mobile drawer that is `visibility: hidden`
+  (not merely off-screen, so keyboards cannot reach it), `prefers-reduced-motion` respected.
+- Layout: long unbroken text (URLs, code) wraps or scrolls inside its box; verified at 390 px with worst-case content.
+- Print: "Save as PDF" uses the browser print dialog with a stylesheet that prints only the plan.
